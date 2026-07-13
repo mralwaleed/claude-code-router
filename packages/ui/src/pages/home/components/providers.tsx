@@ -18,7 +18,8 @@ import {
   useRef, useState, X, isPlainRecord
 } from "../shared/index";
 import { providerUrlWithDefaultScheme } from "@ccr/core/providers/url";
-import type { LocalAgentProviderCandidate } from "@ccr/core/contracts/app";
+import { RefreshCw } from "lucide-react";
+import type { CliProxyProviderSummary, LocalAgentProviderCandidate } from "@ccr/core/contracts/app";
 export function ProvidersView({ accountSnapshots, addProvider, editProvider, notify, providers, removeProvider }: {
   accountSnapshots: ProviderAccountSnapshot[];
   addProvider: () => void;
@@ -2113,6 +2114,9 @@ function ProviderUsageSettings({
   const [testResult, setTestResult] = useState<ProviderAccountTestResult>();
   const [testError, setTestError] = useState("");
   const [newApiUserId, setNewApiUserId] = useState("");
+  const [cliproxyProviders, setCliproxyProviders] = useState<CliProxyProviderSummary[]>([]);
+  const [cliproxyLoading, setCliproxyLoading] = useState(false);
+  const [cliproxyError, setCliproxyError] = useState("");
   const modeOptions = translateOptions(providerAccountModeOptions, t);
   const globalBaseUrl = providerGlobalBaseUrlForProbe(draft.baseUrl, probe, draft.selectedProtocols);
   const showNewApiUserBalanceTemplate = probe?.detectedProvider === "new-api" ||
@@ -2123,6 +2127,11 @@ function ProviderUsageSettings({
     setTestResult(undefined);
     setTestError("");
   }, [draft.accountMode, draft.usageRequestUrl, draft.usageRequestMethod]);
+
+  useEffect(() => {
+    setCliproxyProviders([]);
+    setCliproxyError("");
+  }, [draft.accountMode]);
 
   async function testUsageRequest() {
     if (!window.ccr?.testProviderAccountConnector) {
@@ -2175,6 +2184,32 @@ function ProviderUsageSettings({
         newApiUserId
       )
     });
+  }
+
+  async function loadCliproxyProviders() {
+    if (!window.ccr?.listCliProxyProviders) {
+      setCliproxyError(t("Request failed."));
+      return;
+    }
+    setCliproxyLoading(true);
+    setCliproxyError("");
+    try {
+      const result = await window.ccr.listCliProxyProviders({
+        baseUrl: draft.baseUrl.trim(),
+        apiKey: draft.apiKey.trim(),
+        endpoint: draft.cliproxyEndpoint.trim() || undefined,
+        providerName: draft.name.trim()
+      });
+      setCliproxyProviders(result.providers);
+      if (result.providers.length === 0) {
+        setCliproxyError(t("No usage-supported providers were found on the CLIProxyAPI instance."));
+      }
+    } catch (error) {
+      setCliproxyProviders([]);
+      setCliproxyError(formatError(error));
+    } finally {
+      setCliproxyLoading(false);
+    }
   }
 
   return (
@@ -2291,6 +2326,64 @@ function ProviderUsageSettings({
               {testResult ? (
                 <ProviderUsageTestResultPanel result={testResult} onSelectPath={selectPath} />
               ) : null}
+            </div>
+          ) : null}
+
+          {draft.accountMode === "cliproxy" ? (
+            <div className="sm:col-span-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className="sm:col-span-2 rounded-md border border-border bg-muted/30 px-3 py-2 text-[11px] leading-4 text-muted-foreground">
+                {t("Fetch usage from a CLIProxyAPI provider-scoped endpoint. The provider API key is reused as the CLIProxyAPI management key unless overridden below.")}
+              </div>
+              <Field label={t("CLIProxyAPI base URL")}>
+                <Input
+                  placeholder="http://127.0.0.1:8317"
+                  value={draft.cliproxyEndpoint}
+                  onChange={(event) => onChange({ cliproxyEndpoint: event.target.value })}
+                />
+              </Field>
+              <Field label={t("Management key (optional)")}>
+                <Input
+                  placeholder={t("defaults to provider API key")}
+                  value={draft.cliproxyManagementKey}
+                  onChange={(event) => onChange({ cliproxyManagementKey: event.target.value })}
+                />
+              </Field>
+              <Field className="sm:col-span-2" label={t("Provider")}>
+                <Input
+                  placeholder="codex:account_a1b2c3d4e5f6"
+                  value={draft.cliproxyProviderId}
+                  onChange={(event) => onChange({ cliproxyProviderId: event.target.value })}
+                />
+                {cliproxyProviders.length > 0 ? (
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <SelectControl
+                      onChange={(providerId) => onChange({ cliproxyProviderId: providerId })}
+                      options={cliproxyProviders
+                        .filter((provider) => provider.usageSupported !== false)
+                        .map((provider) => ({ label: provider.displayName || provider.id, value: provider.id }))}
+                      value=""
+                    />
+                    <span className="text-[11px] text-muted-foreground">{t("Pick a listed provider to fill the id above.")}</span>
+                  </div>
+                ) : null}
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <Button disabled={cliproxyLoading} onClick={() => void loadCliproxyProviders()} size="sm" type="button" variant="outline">
+                    <AnimatedIconSwap iconKey={cliproxyLoading ? "loading" : "reload"}>
+                      {cliproxyLoading ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                    </AnimatedIconSwap>
+                    {t("Load providers")}
+                  </Button>
+                  {cliproxyProviders.length > 0 ? <Badge variant="outline">{cliproxyProviders.length} {t("providers")}</Badge> : null}
+                </div>
+                {cliproxyError ? <div className="mt-1 text-[11px] text-destructive">{cliproxyError}</div> : null}
+              </Field>
+              <Label className="sm:col-span-2 flex items-center gap-2 text-[12px] font-normal text-muted-foreground">
+                <Checkbox
+                  checked={draft.cliproxyRefresh}
+                  onCheckedChange={(checked) => onChange({ cliproxyRefresh: checked === true })}
+                />
+                <span>{t("Bypass the CLIProxyAPI usage cache on each fetch (refresh).")}</span>
+              </Label>
             </div>
           ) : null}
 
