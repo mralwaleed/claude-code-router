@@ -137,9 +137,22 @@ export type GatewayProviderConfig = {
   models: string[];
   name: string;
   provider?: string;
+  protocolMode?: ProviderProtocolMode;
   transformer?: unknown;
   type?: GatewayProviderProtocol | string;
 };
+
+/**
+ * How the gateway resolves the protocol for a custom provider.
+ *
+ * - "auto" (default): the provider is probed and the detected protocol is used.
+ * - "manual": the protocol in {@link GatewayProviderConfig.type} is locked and
+ *   used verbatim at runtime. Probing is skipped for protocol selection (it can
+ *   still run for model discovery / connectivity), the manual protocol is not
+ *   required to pass probing before saving, and it survives API key, endpoint,
+ *   or model refreshes.
+ */
+export type ProviderProtocolMode = "auto" | "manual";
 
 export type ProviderReasoningLevel = {
   description: string;

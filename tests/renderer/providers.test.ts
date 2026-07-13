@@ -12,6 +12,7 @@ import {
   createProviderConfigFromDeepLink,
   createProviderDraft,
   createProviderInstallLinkFromDraft,
+  customProviderPresetId,
   providerCapabilitiesForProtocols,
   providerCapabilityBaseUrlForProtocol,
   providerDisplayIcon,
@@ -523,3 +524,108 @@ function providerInstallLinkPayload(link) {
   const bytes = Uint8Array.from(atob(padded), (char) => char.charCodeAt(0));
   return JSON.parse(new TextDecoder().decode(bytes));
 }
+
+test("manual protocol forces a custom endpoint to anthropic_messages", () => {
+  const draft = {
+    ...createProviderDraft([]),
+    baseUrl: "https://api.example.com/v1",
+    name: "Example",
+    presetId: customProviderPresetId,
+    protocol: "anthropic_messages" as const,
+    protocolMode: "manual" as const,
+    selectedProtocols: ["anthropic_messages" as const]
+  };
+
+  // A probe that detects OpenAI Chat (not anthropic) must not override the
+  // manually locked protocol.
+  const probe = {
+    capabilities: [],
+    detectedProtocol: "openai_chat_completions" as const,
+    models: [],
+    normalizedBaseUrl: "https://api.example.com/v1",
+    protocols: providerProtocolOptions.map((option) => ({
+      endpoint: "https://api.example.com/v1",
+      message: "HTTP 400",
+      protocol: option.value,
+      status: 400,
+      supported: option.value === "openai_chat_completions"
+    }))
+  };
+
+  const next = applyProviderProbeResult(draft, probe);
+
+  assert.equal(next.protocolMode, "manual");
+  assert.equal(next.protocol, "anthropic_messages");
+  assert.deepEqual(next.selectedProtocols, ["anthropic_messages"]);
+
+  // The saved capability targets the native Anthropic endpoint derived from the
+  // /v1 base URL (root + /v1/messages at runtime).
+  const capabilities = providerCapabilitiesForProtocols(next.baseUrl, ["anthropic_messages"], probe);
+  assert.deepEqual(
+    capabilities.map((capability) => [capability.type, capability.baseUrl]),
+    [["anthropic_messages", "https://api.example.com"]]
+  );
+});
+
+test("manual protocol survives an API key re-probe that detects gemini_interactions", () => {
+  const draft = {
+    ...createProviderDraft([]),
+    baseUrl: "https://api.example.com/v1",
+    name: "Example",
+    presetId: customProviderPresetId,
+    protocol: "anthropic_messages" as const,
+    protocolMode: "manual" as const,
+    selectedProtocols: ["anthropic_messages" as const]
+  };
+
+  // Simulates the failure mode where changing the API key triggers a re-probe
+  // that now detects gemini_interactions instead of the configured protocol.
+  const probe = {
+    capabilities: [],
+    detectedProtocol: "gemini_interactions" as const,
+    models: [],
+    normalizedBaseUrl: "https://api.example.com/v1",
+    protocols: providerProtocolOptions.map((option) => ({
+      endpoint: "https://api.example.com/v1",
+      message: "HTTP 400",
+      protocol: option.value,
+      status: 400,
+      supported: option.value === "gemini_interactions"
+    }))
+  };
+
+  const next = applyProviderProbeResult(draft, probe);
+
+  assert.equal(next.protocolMode, "manual");
+  assert.equal(next.protocol, "anthropic_messages");
+  assert.notEqual(next.protocol, "gemini_interactions");
+  assert.deepEqual(next.selectedProtocols, ["anthropic_messages"]);
+});
+
+test("auto detect keeps probe-driven protocol selection unchanged", () => {
+  const draft = {
+    ...createProviderDraft([]),
+    baseUrl: "https://generativelanguage.googleapis.com",
+    protocol: "gemini_generate_content" as const,
+    protocolMode: "auto" as const,
+    selectedProtocols: providerProtocolOptions.map((option) => option.value)
+  };
+
+  const next = applyProviderProbeResult(draft, {
+    capabilities: [],
+    detectedProtocol: "gemini_generate_content" as const,
+    models: [],
+    normalizedBaseUrl: draft.baseUrl,
+    protocols: providerProtocolOptions.map((option) => ({
+      endpoint: draft.baseUrl,
+      message: option.value === "gemini_generate_content" ? "HTTP 400: contents is not specified" : "HTTP 404",
+      protocol: option.value,
+      status: option.value === "gemini_generate_content" ? 400 : 404,
+      supported: option.value === "gemini_generate_content"
+    }))
+  });
+
+  assert.equal(next.protocolMode, "auto");
+  assert.equal(next.protocol, "gemini_generate_content");
+  assert.deepEqual(next.selectedProtocols, ["gemini_generate_content"]);
+});

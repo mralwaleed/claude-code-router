@@ -189,6 +189,7 @@ import type {
   ProviderDeepLinkPayload,
   ProviderDeepLinkRequest,
   ProviderModelMetadata,
+  ProviderProtocolMode,
   ProfileConfig,
   ProfileOpenSurface,
   CodexProfileConfigFormat,
@@ -432,6 +433,7 @@ export type AddProviderDraft = {
   presetId: string;
   providerPlugins: unknown[];
   protocol: GatewayProviderProtocol;
+  protocolMode: ProviderProtocolMode;
   selectedModels: string[];
   selectedProtocols: GatewayProviderProtocol[];
   usageBalanceLimitPath: string;

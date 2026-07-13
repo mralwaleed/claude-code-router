@@ -882,6 +882,7 @@ export function createProviderDraftFromDeepLinkPayload(
     presetId: preset?.id ?? customProviderPresetId,
     providerPlugins: [],
     protocol,
+    protocolMode: "auto",
     selectedModels: [],
     selectedProtocols: uniqueProviderProtocols(preset?.endpoints.flatMap((item) => item.protocols) ?? [protocol])
   };
@@ -968,6 +969,7 @@ export function createProviderDraft(providers: GatewayProviderConfig[]): AddProv
     presetId: "",
     providerPlugins: [],
     protocol: "openai_chat_completions",
+    protocolMode: "auto",
     selectedModels: [],
     selectedProtocols: []
   };
@@ -996,6 +998,7 @@ export function createProviderDraftFromProvider(provider: GatewayProviderConfig)
     presetId: preset?.id ?? customProviderPresetId,
     providerPlugins: [],
     protocol,
+    protocolMode: provider.protocolMode ?? "auto",
     selectedModels: [],
     selectedProtocols: selectedProviderProtocolsFromCapabilities(provider.capabilities, protocol)
   };
@@ -1961,6 +1964,55 @@ export function providerCapabilitiesForProtocols(
 }
 
 export function applyProviderProbeResult(draft: AddProviderDraft, probe: GatewayProviderProbeResult): AddProviderDraft {
+  // A manually-locked protocol is never replaced by probing. Model discovery,
+  // account details, and the typed base URL still flow through so connectivity
+  // testing and model refresh keep working through the selected protocol.
+  if (draft.protocolMode === "manual") {
+    const protocol = draft.protocol;
+    const selectedProtocols = uniqueProviderProtocols([protocol]);
+    const modelDisplayNames = mergeModelDisplayNames(draft.modelDisplayNames, probe.modelDisplayNames);
+    const modelMetadata = mergeModelMetadata(draft.modelMetadata, probe.modelMetadata);
+    const accountDraft = providerProbeAccountDraftPatch(draft, probe.account);
+    const baseUrl = providerGlobalBaseUrlForProbe(draft.baseUrl, probe, selectedProtocols);
+
+    if (probe.models.length === 0) {
+      return {
+        ...draft,
+        ...accountDraft,
+        baseUrl,
+        modelDisplayNames,
+        modelMetadata,
+        protocol,
+        selectedModels: mergeProviderModelLists(draft.selectedModels),
+        selectedProtocols
+      };
+    }
+
+    const detectedModels = new Set(probe.models);
+    const typedModels = splitLines(draft.modelsText);
+    const selectedCatalogModels = draft.selectedModels.filter((model) => detectedModels.has(model));
+    const selectedCustomModels = draft.selectedModels.filter((model) => !detectedModels.has(model));
+    const typedCatalogModels = typedModels.filter((model) => detectedModels.has(model));
+    const typedCustomModels = typedModels.filter((model) => !detectedModels.has(model));
+    const selectedModels = mergeProviderModelLists(selectedCatalogModels, typedCatalogModels);
+    const customModels = mergeProviderModelLists(selectedCustomModels, typedCustomModels);
+    const nextSelectedModels = selectedModels.length > 0 || customModels.length > 0
+      ? selectedModels
+      : mergeProviderModelLists(draft.selectedModels);
+
+    return {
+      ...draft,
+      ...accountDraft,
+      baseUrl,
+      modelDisplayNames,
+      modelMetadata,
+      protocol,
+      modelsText: customModels.join("\n"),
+      selectedModels: nextSelectedModels,
+      selectedProtocols
+    };
+  }
+
   const detectedProtocol = probe.detectedProtocol ?? draft.protocol;
   const selectedProtocols = selectedProviderProtocolsForProbe(draft.selectedProtocols, probe, detectedProtocol, draft.presetId);
   const protocol = selectedProtocols.includes(draft.protocol)

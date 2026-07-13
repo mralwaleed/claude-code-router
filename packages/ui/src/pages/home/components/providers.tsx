@@ -12,7 +12,7 @@ import {
   providerAccountConnectorsTextWithNewApiUserBalanceTemplate, providerAccountSnapshotCredentialLabel, providerAccountSnapshotLabel, ProviderAccountTestPath,
   ProviderAccountTestResult, providerBaseUrl, providerCapabilitiesSummary, ProviderCredentialDraft, ProviderDeepLinkPayload, ProviderDeepLinkRequest, providerDraftSafetyIssue, providerCredentialDraftPatchFromJson, providerHttpJsonConnectorFromDraft,
   ProviderConnectivityCheckReport, providerCapabilityBaseUrlForProtocol, providerDeepLinkDisplayIcon, providerListItemKey, providerMatchesQuery, ProviderPreset, providerPresetIconUrls, providerProbeHasSupportedProtocol,
-  providerDisplayIcon, providerGlobalBaseUrlForProbe, providerModelDisplayName, providerModelDisplayTitle, providerSelectableProtocolsFromProbe, providerUsageFieldPatch, ProviderUsageFieldTarget, providerUsageMethodOptions, Search, SelectControl,
+  providerDisplayIcon, providerGlobalBaseUrlForProbe, providerModelDisplayName, providerModelDisplayTitle, providerProtocolOptions, providerSelectableProtocolsFromProbe, providerUsageFieldPatch, ProviderUsageFieldTarget, providerUsageMethodOptions, Search, SelectControl,
   resolveProviderDeepLinkPreset, ShieldCheck, splitLines, splitModelTagInput, Switch, Textarea, translatedProviderProtocolLabel, translateOptions,
   translateProbeProtocolMessage, Trash2, uniqueProviderName, uniqueProviderProtocols, useAppErrorText, useAppText, useEffect, useMemo,
   useRef, useState, X, isPlainRecord
@@ -1375,6 +1375,14 @@ export function AddProviderForm({
   ];
   const selectableProtocols = providerSelectableProtocolsFromProbe(probe);
   const protocolProbeRows = useMemo(() => uniqueProviderProbeProtocolRows(probe?.protocols ?? []), [probe]);
+  const protocolModeOptions = useMemo(() => [
+    { label: t("Auto detect"), value: "auto" },
+    ...providerProtocolOptions.map((option) => ({
+      label: translatedProviderProtocolLabel(option.value, t),
+      value: option.value
+    }))
+  ], [t]);
+  const protocolModeValue = draft.protocolMode === "manual" ? draft.protocol : "auto";
   const configuredModels = mergeProviderModelLists(draft.selectedModels, splitLines(draft.modelsText));
   const hasConnectivityCheckInputs = Boolean(
     !localAgentImport &&
@@ -1562,6 +1570,36 @@ export function AddProviderForm({
                   {iconDetecting
                     ? t("Detecting icon")
                     : t("Enter API endpoint, API key, and at least one model to enable connectivity check.")}
+                </span>
+              </div>
+            ) : null}
+          </Field>
+        ) : null}
+        {customEndpoint ? (
+          <Field className="sm:col-span-2" label={t("Protocol mode")}>
+            <SelectControl
+              onChange={(value) => {
+                if (value === "auto") {
+                  onChange({ protocolMode: "auto" }, true);
+                  return;
+                }
+                const option = providerProtocolOptions.find((item) => item.value === value);
+                if (!option) {
+                  return;
+                }
+                onChange({
+                  protocolMode: "manual",
+                  protocol: option.value,
+                  selectedProtocols: [option.value]
+                }, true);
+              }}
+              options={protocolModeOptions}
+              value={protocolModeValue}
+            />
+            {draft.protocolMode === "manual" ? (
+              <div className="flex min-h-4 items-center gap-1.5 text-[11px] leading-4 text-muted-foreground">
+                <span className="min-w-0">
+                  {t("Manual protocol overrides auto-detection and is used as-is at runtime.")}
                 </span>
               </div>
             ) : null}
