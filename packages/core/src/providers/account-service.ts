@@ -291,6 +291,18 @@ export function cliproxyUsageMetersForTest(payload: unknown): ProviderAccountMet
     .filter((meter): meter is ProviderAccountMeter => Boolean(meter));
 }
 
+/**
+ * Test-only entry that runs the cliproxy connector fetch + normalization against
+ * a provider + connector, so unit tests can drive it with a local HTTP server
+ * without loading app config. Returns the connector result shape.
+ */
+export async function cliproxyConnectorForTest(
+  provider: GatewayProviderConfig,
+  connector: ProviderAccountCliProxyConnectorConfig
+): Promise<ConnectorResult> {
+  return resolveCliproxyConnector({} as AppConfig, provider, connector);
+}
+
 export async function resetCodexRateLimitCredit(request: ProviderAccountResetRequest): Promise<ProviderAccountResetResult> {
   const providerName = request.provider?.trim();
   const creditId = request.creditId?.trim();
