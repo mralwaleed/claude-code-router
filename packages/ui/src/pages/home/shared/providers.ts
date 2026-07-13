@@ -180,6 +180,7 @@ import type {
   PluginDirectorySelection,
   PluginMarketplaceEntry,
   ProviderAccountConfig,
+  ProviderAccountCliProxyConnectorConfig,
   ProviderAccountConnectorConfig,
   ProviderAccountHttpJsonConnectorConfig,
   ProviderAccountMeter,
@@ -1186,6 +1187,18 @@ export function parseProviderAccountDraft(draft: AddProviderDraft): GatewayProvi
     };
   }
 
+  if (draft.accountMode === "cliproxy") {
+    const connector = providerCliproxyConnectorFromDraft(draft);
+    if (typeof connector === "string") {
+      return connector;
+    }
+    return {
+      connectors: [connector],
+      enabled: true,
+      refreshIntervalMs: refreshIntervalMs && refreshIntervalMs > 0 ? refreshIntervalMs : undefined
+    };
+  }
+
   if (draft.accountMode === "http-json" || draft.usageRequestUrl.trim()) {
     const connector = providerHttpJsonConnectorFromDraft(draft);
     if (typeof connector === "string") {
@@ -1225,6 +1238,10 @@ export function createDefaultProviderAccountDraft(): Pick<
   | "accountEnabled"
   | "accountMode"
   | "accountRefreshIntervalMs"
+  | "cliproxyEndpoint"
+  | "cliproxyManagementKey"
+  | "cliproxyProviderId"
+  | "cliproxyRefresh"
   | "usageBalanceLimitPath"
   | "usageBalanceRemainingPath"
   | "usageBalanceUnit"
@@ -1245,6 +1262,10 @@ export function createDefaultProviderAccountDraft(): Pick<
     accountEnabled: defaultProviderAccountConfig.enabled !== false,
     accountMode: "standard",
     accountRefreshIntervalMs: "",
+    cliproxyEndpoint: "",
+    cliproxyManagementKey: "",
+    cliproxyProviderId: "",
+    cliproxyRefresh: false,
     usageBalanceLimitPath: "",
     usageBalanceRemainingPath: "",
     usageBalanceUnit: "USD",
@@ -1269,6 +1290,22 @@ export function createProviderAccountDraftFromConfig(account: ProviderAccountCon
   }
 
   const connectors = account.connectors ?? [];
+  const cliproxyConnector = connectors.length === 1 && connectors[0]?.type === "cliproxy"
+    ? (connectors[0] as ProviderAccountCliProxyConnectorConfig)
+    : undefined;
+  if (cliproxyConnector) {
+    return {
+      ...base,
+      accountConnectorsText: JSON.stringify(connectors, null, 2),
+      accountEnabled: account.enabled === true,
+      accountMode: "cliproxy",
+      accountRefreshIntervalMs: account.refreshIntervalMs ? String(account.refreshIntervalMs) : "",
+      cliproxyEndpoint: cliproxyConnector.endpoint ?? "",
+      cliproxyManagementKey: cliproxyConnector.managementKey ?? "",
+      cliproxyProviderId: cliproxyConnector.providerId ?? "",
+      cliproxyRefresh: cliproxyConnector.refresh === true
+    };
+  }
   const httpJsonConnector = connectors.length === 1 && connectors[0]?.type === "http-json"
     ? connectors[0] as ProviderAccountHttpJsonConnectorConfig
     : undefined;
@@ -1316,6 +1353,22 @@ export function createProviderAccountDraftFromConfig(account: ProviderAccountCon
     usageSubscriptionRemainingPath: stringValue(subscriptionMeter?.remaining) || "",
     usageSubscriptionResetPath: stringValue(subscriptionMeter?.resetAt) || "",
     usageSubscriptionUnit: stringValue(subscriptionMeter?.unit) || "tokens"
+  };
+}
+
+export function providerCliproxyConnectorFromDraft(draft: AddProviderDraft): ProviderAccountCliProxyConnectorConfig | string {
+  const providerId = draft.cliproxyProviderId.trim();
+  if (!providerId) {
+    return "CLIProxyAPI provider id is required. Pick a provider from the list.";
+  }
+  const endpoint = draft.cliproxyEndpoint.trim();
+  return {
+    auth: "provider-api-key",
+    providerId,
+    type: "cliproxy",
+    ...(endpoint ? { endpoint } : {}),
+    ...(draft.cliproxyManagementKey.trim() ? { managementKey: draft.cliproxyManagementKey.trim() } : {}),
+    ...(draft.cliproxyRefresh ? { refresh: true } : {})
   };
 }
 
