@@ -169,6 +169,7 @@ const webClientBridge: CcrApi = {
   startGateway: () => rpc("startGateway") as ReturnType<CcrApi["startGateway"]>,
   stopGateway: () => rpc("stopGateway") as ReturnType<CcrApi["stopGateway"]>,
   stopProfile: (request) => rpc("stopProfile", [request]) as ReturnType<CcrApi["stopProfile"]>,
+  listCliProxyProviders: (request) => rpc("listCliProxyProviders", [request]) as ReturnType<CcrApi["listCliProxyProviders"]>,
   testProviderAccountConnector: (request) => rpc("testProviderAccountConnector", [request]) as ReturnType<CcrApi["testProviderAccountConnector"]>,
   updateCheck: () => rpc("updateCheck") as ReturnType<CcrApi["updateCheck"]>,
   updateDownload: () => rpc("updateDownload") as ReturnType<CcrApi["updateDownload"]>,

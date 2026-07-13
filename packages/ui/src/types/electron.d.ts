@@ -52,6 +52,8 @@ import type {
   ProviderAccountResetRequest,
   ProviderAccountResetResult,
   ProviderAccountSnapshotRequestOptions,
+  CliProxyProviderListRequest,
+  CliProxyProviderListResult,
   ProviderAccountTestRequest,
   ProviderAccountTestResult,
   ProviderIconDetectionRequest,
@@ -143,6 +145,7 @@ declare global {
       stopProfile: (request: ProfileOpenRequest) => Promise<ProfileStopResult>;
       scanBotHandoffBluetoothTargets: () => Promise<BotHandoffScanTarget[]>;
       scanBotHandoffWifiTargets: () => Promise<BotHandoffScanTarget[]>;
+      listCliProxyProviders: (request: CliProxyProviderListRequest) => Promise<CliProxyProviderListResult>;
       testProviderAccountConnector: (request: ProviderAccountTestRequest) => Promise<ProviderAccountTestResult>;
       updateCheck: () => Promise<AppUpdateStatus>;
       updateDownload: () => Promise<AppUpdateStatus>;
