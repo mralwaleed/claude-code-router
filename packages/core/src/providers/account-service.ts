@@ -9,12 +9,16 @@ import { fetchWithSystemProxy } from "@ccr/core/proxy/system-proxy-fetch";
 import { normalizeProviderBaseUrl, providerUrlWithDefaultScheme } from "@ccr/core/providers/url";
 import type {
   AppConfig,
+  CliProxyProviderListRequest,
+  CliProxyProviderListResult,
+  CliProxyProviderSummary,
   GatewayProviderConfig,
   ProviderAccountConfig,
   ProviderAccountConnectorConfig,
   ProviderAccountConnectorError,
   ProviderAccountConnectorSource,
   ProviderAccountAuthMode,
+  ProviderAccountCliProxyConnectorConfig,
   ProviderAccountHttpJsonConnectorConfig,
   ProviderAccountLocalEstimateConnectorConfig,
   ProviderAccountLocalWindowConfig,
@@ -188,6 +192,103 @@ export function newApiKeyUsageFallbackMessageForTest(payload: unknown): string {
 
 export function newApiUserSelfMetersForTest(payload: unknown): ProviderAccountMeter[] {
   return newApiUserSelfMeters(payload);
+}
+
+/**
+ * Build a provider account config bound to a CLIProxyAPI provider-scoped usage
+ * endpoint. `providerId` is the stable CLIProxyAPI provider id (the
+ * "usageProviderId") returned by {@link listCliProxyProviders}.
+ */
+export function cliproxyProviderAccountConfig(
+  providerId: string,
+  options: { endpoint?: string; managementKey?: string; refresh?: boolean } = {}
+): ProviderAccountConfig {
+  const id = providerId?.trim();
+  if (!id) {
+    throw new Error("CLIProxyAPI usage providerId is required.");
+  }
+  const connector: ProviderAccountCliProxyConnectorConfig = {
+    auth: "provider-api-key",
+    providerId: id,
+    type: "cliproxy",
+    ...(options.endpoint?.trim() ? { endpoint: options.endpoint.trim() } : {}),
+    ...(options.managementKey?.trim() ? { managementKey: options.managementKey.trim() } : {}),
+    ...(options.refresh ? { refresh: true } : {})
+  };
+  return {
+    connectors: [connector],
+    enabled: true
+  };
+}
+
+/**
+ * List providers/accounts available on a CLIProxyAPI instance
+ * (`GET /v0/management/providers`). Drives the CCR account picker so the user
+ * selects which upstream account to bind rather than hardcoding one.
+ */
+export async function listCliProxyProviders(request: CliProxyProviderListRequest): Promise<CliProxyProviderListResult> {
+  const base = (request.endpoint?.trim() || cliproxyOriginFromBaseUrl(request.baseUrl)) ?? "";
+  if (!base) {
+    throw new Error("CLIProxyAPI base URL is required to list providers.");
+  }
+  const url = `${base.replace(/\/+$/, "")}/v0/management/providers`;
+  const headers: Record<string, string> = { accept: "application/json" };
+  const key = request.apiKey?.trim();
+  if (key) {
+    headers.authorization = `Bearer ${key}`;
+    headers["x-management-key"] = key;
+  }
+  const response = await fetchWithSystemProxy(url, { headers, method: "GET" });
+  const payload = await readJsonResponse(response);
+  const providers = Array.isArray((payload as { providers?: unknown })?.providers)
+    ? (payload as { providers: unknown[] }).providers
+        .map(normalizeCliProxyProviderSummary)
+        .filter((summary): summary is CliProxyProviderSummary => Boolean(summary))
+    : [];
+  return { endpoint: base, providers };
+}
+
+function cliproxyOriginFromBaseUrl(baseUrl: string | undefined): string | undefined {
+  const value = baseUrl?.trim();
+  if (!value) {
+    return undefined;
+  }
+  try {
+    return new URL(providerUrlWithDefaultScheme(normalizeProviderBaseUrl(value))).origin;
+  } catch {
+    return value;
+  }
+}
+
+function normalizeCliProxyProviderSummary(value: unknown): CliProxyProviderSummary | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const id = readString(value.id);
+  if (!id) {
+    return undefined;
+  }
+  return {
+    displayName: readString(value.displayName) || readString(value.display_name),
+    id,
+    status: readString(value.status),
+    type: readString(value.type),
+    usageSupported: readBoolean(value.usageSupported) ?? readBoolean(value.usage_supported)
+  };
+}
+
+/**
+ * Pure normalization of a CLIProxyAPI usage payload into meters, for unit tests.
+ * Mirrors the meters extraction in {@link normalizeRemoteSnapshot} without
+ * performing any network access.
+ */
+export function cliproxyUsageMetersForTest(payload: unknown): ProviderAccountMeter[] {
+  if (!isRecord(payload) || !Array.isArray(payload.meters)) {
+    return [];
+  }
+  return payload.meters
+    .map((meter) => normalizeMeter(meter, "cliproxy"))
+    .filter((meter): meter is ProviderAccountMeter => Boolean(meter));
 }
 
 export async function resetCodexRateLimitCredit(request: ProviderAccountResetRequest): Promise<ProviderAccountResetResult> {
@@ -550,6 +651,9 @@ async function resolveConnector(
     if (connector.type === "http-json") {
       return await resolveHttpJsonConnector(config, provider, connector);
     }
+    if (connector.type === "cliproxy") {
+      return await resolveCliproxyConnector(config, provider, connector);
+    }
     if (connector.type === "plugin") {
       return await resolvePluginConnector(config, provider, connector, now);
     }
@@ -645,6 +749,115 @@ async function resolveHttpJsonConnector(
     source: "http-json",
     status: normalizeStatus(readMappedString(connector.mapping.status, payload))
   };
+}
+
+async function resolveCliproxyConnector(
+  config: AppConfig,
+  provider: GatewayProviderConfig,
+  connector: ProviderAccountCliProxyConnectorConfig
+): Promise<ConnectorResult> {
+  const providerId = connector.providerId?.trim();
+  if (!providerId) {
+    return connectorError(
+      "cliproxy",
+      "CLIProxyAPI usage connector is missing a providerId (usageProviderId).",
+      connectorId(connector)
+    );
+  }
+
+  const base = cliproxyManagementBaseUrl(provider, connector);
+  if (!base) {
+    return connectorError(
+      "cliproxy",
+      "CLIProxyAPI usage connector could not resolve the management base URL. Set the provider api_base_url or connector endpoint.",
+      connectorId(connector)
+    );
+  }
+
+  const usageUrl = cliproxyUsageUrl(base, providerId, connector.refresh);
+  const headers = cliproxyRequestHeaders(config, provider, connector);
+
+  let response: Response;
+  try {
+    response = await fetchWithSystemProxy(usageUrl, { headers, method: "GET" });
+  } catch (error) {
+    return connectorError("cliproxy", formatError(error), connectorId(connector));
+  }
+
+  let snapshot: ProviderAccountSnapshot;
+  try {
+    const payload = await readJsonResponse(response);
+    snapshot = normalizeRemoteSnapshot(provider.name, payload, "cliproxy");
+  } catch (error) {
+    return connectorError("cliproxy", formatError(error), connectorId(connector));
+  }
+
+  return {
+    errors: snapshot.errors ?? [],
+    meters: snapshot.meters,
+    message: snapshot.message,
+    source: "cliproxy",
+    status: snapshot.status
+  };
+}
+
+function cliproxyManagementBaseUrl(
+  provider: GatewayProviderConfig,
+  connector: ProviderAccountCliProxyConnectorConfig
+): string | undefined {
+  const configured = connector.endpoint?.trim();
+  if (configured) {
+    return configured;
+  }
+  const baseUrl = providerBaseUrl(provider);
+  if (!baseUrl) {
+    return undefined;
+  }
+  try {
+    return new URL(providerUrlWithDefaultScheme(normalizeProviderBaseUrl(baseUrl))).origin;
+  } catch {
+    return baseUrl;
+  }
+}
+
+function cliproxyManagementKey(
+  provider: GatewayProviderConfig,
+  connector: ProviderAccountCliProxyConnectorConfig
+): string {
+  const configured = connector.managementKey?.trim();
+  if (configured) {
+    return configured;
+  }
+  // The CLIProxyAPI management key is, by convention, the same secret used as
+  // the provider api_key. Reuse it so no second secret is stored unless an
+  // explicit override is configured.
+  return providerApiKey(provider);
+}
+
+function cliproxyRequestHeaders(
+  _config: AppConfig,
+  provider: GatewayProviderConfig,
+  connector: ProviderAccountCliProxyConnectorConfig
+): Record<string, string> {
+  const headers: Record<string, string> = {
+    accept: "application/json",
+    ...(connector.headers ?? {})
+  };
+  const key = cliproxyManagementKey(provider, connector);
+  if (key) {
+    headers.authorization ??= `Bearer ${key}`;
+    headers["x-management-key"] ??= key;
+  }
+  return headers;
+}
+
+function cliproxyUsageUrl(base: string, providerId: string, refresh?: boolean): string {
+  const root = base.replace(/\/+$/, "");
+  const url = new URL(`${root}/v0/management/providers/${encodeURIComponent(providerId)}/usage`);
+  if (refresh) {
+    url.searchParams.set("refresh", "1");
+  }
+  return url.toString();
 }
 
 async function resolvePluginConnector(
