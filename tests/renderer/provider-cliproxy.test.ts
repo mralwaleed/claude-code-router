@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { GatewayProviderConfig } from "@ccr/core/contracts/app";
 import {
   createProviderAccountDraftFromConfig,
   createProviderDraft,
+  createProviderDraftFromProvider,
   parseProviderAccountDraft,
   providerCliproxyConnectorFromDraft
 } from "../../packages/ui/src/pages/home/shared/index.tsx";
@@ -90,4 +92,79 @@ test("disabled account yields no connectors", () => {
   };
   const draft = { ...createProviderDraft([]), ...createProviderAccountDraftFromConfig(account), accountEnabled: false };
   assert.equal(parseProviderAccountDraft(draft), undefined);
+});
+
+test("cliproxy save ignores a stale http-json usage URL and never reverts to http-json", () => {
+  const draft = {
+    ...createProviderDraft([]),
+    accountEnabled: true,
+    accountMode: "cliproxy",
+    cliproxyProviderId: "codex:account_b2037260a35a",
+    // leftover fields from the previous http-json connector that pointed at the :8321 bridge
+    usageRequestUrl: "http://127.0.0.1:8321/usage",
+    usageRequestMethod: "GET"
+  };
+
+  const parsed = parseProviderAccountDraft(draft);
+  assert.equal(typeof parsed, "object");
+  const restored = parsed as unknown as { connectors?: Array<{ type?: string; endpoint?: string; providerId?: string }> };
+  const connectors = restored.connectors ?? [];
+
+  assert.equal(connectors.length, 1, "exactly one connector");
+  assert.equal(connectors[0]?.type, "cliproxy");
+  assert.equal(connectors[0]?.providerId, "codex:account_b2037260a35a");
+  assert.ok(!connectors.some((c) => c.type === "http-json"), "must not produce an http-json connector");
+  assert.ok(
+    !connectors.some((c) => (c.endpoint ?? "").includes("8321")),
+    "must not reference the retired :8321 bridge"
+  );
+});
+
+test("cliproxy account connector reopens in cliproxy mode and keeps a manual anthropic_messages protocol", () => {
+  const provider = {
+    id: "provider-2",
+    name: "provider-2",
+    api_base_url: "http://127.0.0.1:8317/v1",
+    api_key: "test-provider-api-key",
+    models: ["gpt-5.6-terra"],
+    protocolMode: "manual",
+    type: "anthropic_messages",
+    account: {
+      enabled: true,
+      connectors: [
+        {
+          type: "cliproxy",
+          providerId: "codex:account_b2037260a35a",
+          auth: "provider-api-key",
+          endpoint: "http://127.0.0.1:8317",
+          managementKey: "separate-management-key",
+          refresh: true
+        }
+      ]
+    }
+  } as unknown as GatewayProviderConfig;
+
+  const draft = createProviderDraftFromProvider(provider);
+
+  // usage connector reopens in cliproxy mode with every persisted field
+  assert.equal(draft.accountMode, "cliproxy");
+  assert.equal(draft.cliproxyProviderId, "codex:account_b2037260a35a");
+  assert.equal(draft.cliproxyEndpoint, "http://127.0.0.1:8317");
+  assert.equal(draft.cliproxyManagementKey, "separate-management-key");
+  assert.equal(draft.cliproxyRefresh, true);
+
+  // the manual Anthropic protocol override is independent of the usage connector
+  assert.equal(draft.protocolMode, "manual");
+  assert.equal(draft.protocol, "anthropic_messages");
+  assert.equal(draft.modelsText, "gpt-5.6-terra");
+
+  // saving again reproduces exactly the cliproxy connector (no http-json revert)
+  const reparsed = parseProviderAccountDraft(draft);
+  assert.equal(typeof reparsed, "object");
+  const conn = (reparsed as unknown as {
+    connectors?: Array<{ type?: string; providerId?: string; managementKey?: string }>;
+  }).connectors?.[0];
+  assert.equal(conn?.type, "cliproxy");
+  assert.equal(conn?.providerId, "codex:account_b2037260a35a");
+  assert.equal(conn?.managementKey, "separate-management-key");
 });
