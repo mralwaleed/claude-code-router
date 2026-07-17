@@ -1063,6 +1063,11 @@ function parseProviders(value: unknown): GatewayProviderConfig[] | undefined {
         modelMetadata,
         models,
         name,
+        // The manual protocol override must survive a disk round-trip; otherwise
+        // it is silently dropped on every loadAppConfig() and the runtime lock in
+        // manualProviderProtocol() never engages, so the provider falls back to
+        // its detected capability (e.g. gemini_interactions).
+        protocolMode: parseEnumValue(item.protocolMode, ["auto", "manual"] as const, undefined),
         provider: readString(item.provider),
         transformer: item.transformer,
         type: readString(item.type)
@@ -1072,6 +1077,10 @@ function parseProviders(value: unknown): GatewayProviderConfig[] | undefined {
     .filter((item): item is GatewayProviderConfig => Boolean(item));
 
   return withProviderIds(providers);
+}
+
+export function parseProvidersForTest(value: unknown): GatewayProviderConfig[] | undefined {
+  return parseProviders(value);
 }
 
 function parseModelDescriptions(value: unknown, models: string[]): Record<string, string> | undefined {
