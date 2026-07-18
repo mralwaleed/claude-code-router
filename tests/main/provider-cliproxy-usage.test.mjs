@@ -47,6 +47,31 @@ const sampleUsagePayload = {
   subscription: { remaining: 60, limit: 100, resetAt: "2026-07-21T00:00:00.000Z" }
 };
 
+// Representative normalized Claude (Anthropic) usage payload produced by the
+// CLIProxyAPI Claude adapter. Rolling windows use a 0-100 used/remaining scale
+// (utilization 0.0 -> 0% used / 100% remaining); a scoped "limits" entry
+// (Fable) and the extra-usage credits meter are preserved. No real account id,
+// token, or email.
+const sampleClaudeUsagePayload = {
+  provider: {
+    id: "claude:account_493276b6ec2c",
+    type: "claude",
+    displayName: "Claude Max · c***@example.com"
+  },
+  status: "ok",
+  message: "5h: 75% remaining | 7d: 100% remaining | plan: max",
+  fetchedAt: "2026-07-13T00:00:00.000Z",
+  meters: [
+    { id: "five_hour", kind: "rate_limit", label: "5-hour usage window", used: 25, remaining: 75, limit: 100, unit: "%", window: "5h", resetAt: "2026-07-13T05:00:00.000Z" },
+    { id: "seven_day", kind: "rate_limit", label: "7-day usage window", used: 0, remaining: 100, limit: 100, unit: "%", window: "weekly", resetAt: "2026-07-20T00:00:00.000Z" },
+    { id: "seven_day_opus", kind: "rate_limit", label: "7-day Opus", used: 50, remaining: 50, limit: 100, unit: "%", window: "weekly", resetAt: "2026-07-20T00:00:00.000Z" },
+    { id: "weekly_scoped-claude-fable-5", kind: "rate_limit", label: "Weekly scoped limit · claude-fable-5", used: 30, remaining: 70, limit: 100, unit: "%", window: "weekly", resetAt: "2026-07-20T00:00:00.000Z" },
+    { id: "extra_usage", kind: "request_limit", label: "Extra usage (monthly)", used: 25, remaining: 75, limit: 100, unit: "credits", window: "monthly" }
+  ],
+  balance: { remaining: 75, used: 25, total: 100 },
+  subscription: { remaining: 100, limit: 100, resetAt: "2026-07-20T00:00:00.000Z" }
+};
+
 function withMockServer(handler) {
   return new Promise((resolve, reject) => {
     const server = createServer(handler);
@@ -82,6 +107,34 @@ test("cliproxyUsageMetersForTest ignores non-object or meterless payloads", () =
   assert.deepEqual(cliproxyUsageMetersForTest(null), []);
   assert.deepEqual(cliproxyUsageMetersForTest({}), []);
   assert.deepEqual(cliproxyUsageMetersForTest({ meters: "not-an-array" }), []);
+});
+
+test("cliproxyUsageMetersForTest accepts a normalized Claude payload (five_hour / seven_day / scoped / extra_usage)", () => {
+  const meters = cliproxyUsageMetersForTest(sampleClaudeUsagePayload);
+  assert.ok(meters.length >= 4, `expected >=4 meters, got ${meters.length}`);
+
+  const fiveHour = meters.find((meter) => meter.id === "five_hour");
+  assert.ok(fiveHour, "five_hour meter present");
+  assert.equal(fiveHour.remaining, 75);
+  assert.equal(fiveHour.limit, 100);
+  assert.equal(fiveHour.unit, "%");
+  assert.equal(fiveHour.window, "5h");
+  assert.equal(fiveHour.source, "cliproxy");
+
+  // zero utilization -> 0% used / 100% remaining
+  const sevenDay = meters.find((meter) => meter.id === "seven_day");
+  assert.ok(sevenDay, "seven_day meter present");
+  assert.equal(sevenDay.remaining, 100);
+
+  // scoped Fable limit (percent already on a 0-100 scale) is preserved
+  const fable = meters.find((meter) => meter.id === "weekly_scoped-claude-fable-5");
+  assert.ok(fable, "fable scoped meter present");
+  assert.equal(fable.remaining, 70);
+
+  // extra-usage credits meter is preserved
+  const extra = meters.find((meter) => meter.id === "extra_usage");
+  assert.ok(extra, "extra_usage meter present");
+  assert.equal(extra.unit, "credits");
 });
 
 test("cliproxyProviderAccountConfig builds a cliproxy connector with the providerId", () => {
