@@ -4,6 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { availableGatewayModelIds, type AppConfig, type RouterBuiltInAgentRuleId, type RouterConfig, type RouterFallbackConfig, type RouterRule, type RouterRuleCondition, type RouterRuleRewrite } from "@ccr/core/contracts/app";
 import { CONFIGDIR } from "@ccr/core/config/constants";
+import { ClaudeCodeLeaderDetector } from "@ccr/core/swarm/leader-detector";
+import { resolveSwarmRequest, type SwarmRequestContext, type SwarmRoutingResult } from "@ccr/core/swarm/routing";
+import type { ClassificationDiagnostics } from "@ccr/core/swarm/classification";
+
+export type SwarmResolution = { diagnostics: ClassificationDiagnostics; routing: SwarmRoutingResult };
 
 type HeaderValue = string | string[] | undefined;
 
@@ -43,12 +48,15 @@ export class ClaudeCodeRouterPlugin {
 
   constructor(private readonly config: AppConfig) {}
 
+  private readonly leaderDetector = new ClaudeCodeLeaderDetector();
+
   async routeRequest(input: {
     body: Record<string, unknown>;
     headers: Record<string, HeaderValue>;
     method: string;
     url: string;
-  }): Promise<{ body: Record<string, unknown>; decision: ClaudeCodeRouteDecision }> {
+    swarm?: SwarmRequestContext;
+  }): Promise<{ body: Record<string, unknown>; decision: ClaudeCodeRouteDecision; swarm?: SwarmResolution }> {
     const body = cloneRecord(input.body);
     const request: MutableRequestLike = {
       body,
@@ -79,10 +87,33 @@ export class ClaudeCodeRouterPlugin {
     request.tokenCount = tokenCount;
 
     const customModel = await this.resolveCustomRoute(request);
-    const configuredDecision = resolveConfiguredRouteDecision(request, this.config);
+
+    // Swarm resolution operates on one immutable registry snapshot. Precedence:
+    // custom router (absolute) > Swarm (agent/leader/default) > existing marker/profile/default.
+    // Swarm applies only when it owns the decision; on decline it falls through. A valid Swarm
+    // decision is never overridden by markers (markers apply only on decline). The custom router
+    // remains absolute: when it selects a model, Swarm is logged but does not replace it.
+    let swarmResolution: SwarmResolution | undefined;
+    if (input.swarm) {
+      const resolved = resolveSwarmRequest({ system: body.system, ctx: input.swarm, leaderDetector: this.leaderDetector });
+      swarmResolution = resolved;
+    }
+
+    let routedModel: string | undefined;
+    let reason: string;
+    let fallback: RouterFallbackConfig | undefined;
     if (customModel) {
       body.model = customModel;
+      routedModel = customModel;
+      reason = "custom-router";
+      fallback = this.config.Router.fallback;
+    } else if (swarmResolution?.routing.owns) {
+      body.model = swarmResolution.routing.model as string;
+      routedModel = swarmResolution.routing.model;
+      reason = swarmResolution.routing.reason;
+      fallback = this.config.Router.fallback;
     } else {
+      const configuredDecision = resolveConfiguredRouteDecision(request, this.config);
       if (configuredDecision.rewrites?.length) {
         for (const rewrite of configuredDecision.rewrites) {
           applyRouterRewrite(rewrite, request);
@@ -93,18 +124,21 @@ export class ClaudeCodeRouterPlugin {
       if (configuredDecision.model) {
         body.model = configuredDecision.model;
       }
+      routedModel = configuredDecision.model ?? readString(body.model);
+      reason = configuredDecision.reason;
+      fallback = configuredDecision.fallback;
     }
-    const routedModel = customModel ?? configuredDecision.model ?? readString(body.model);
 
     return {
       body,
       decision: {
-        fallback: customModel ? this.config.Router.fallback : configuredDecision.fallback,
+        fallback,
         model: routedModel,
-        reason: customModel ? "custom-router" : configuredDecision.reason,
+        reason,
         sessionId,
         tokenCount
-      }
+      },
+      swarm: swarmResolution
     };
   }
 

@@ -127,30 +127,43 @@ export type AttributionConfidence = "exact" | "ambiguous" | "unknown" | "leader"
 export type AttributionMethod = "exact-body-containment" | "leader-detector" | "swarm-default";
 
 export const SWARM_ROUTING_REASON = {
-  agentOverride: "swarm:agent-override",
+  agentUiOverride: "swarm:agent-ui-override",
   agentFrontmatter: "swarm:agent-frontmatter",
   leader: "swarm:leader",
+  defaultUnknown: "swarm:default-unknown",
+  defaultAmbiguous: "swarm:default-ambiguous",
+  assignmentInvalid: "swarm:assignment-invalid",
   leaderUnconfirmed: "swarm:leader-unconfirmed",
-  default: "swarm:default",
-  unknownFallback: "swarm:unknown-agent-fallback",
-  ambiguousFallback: "swarm:ambiguous-agent-fallback"
+  registryUnavailable: "swarm:registry-unavailable",
+  profileDisabled: "swarm:profile-disabled",
+  fallbackExistingCcr: "swarm:fallback-existing-ccr"
 } as const;
 export type SwarmRoutingReason = (typeof SWARM_ROUTING_REASON)[keyof typeof SWARM_ROUTING_REASON];
 
 export type SwarmAttribution = {
   requestId: string;
-  swarmSessionId: string;
   swarmId: string;
-  /** Matched agent id; empty for leader/unknown. */
+  swarmSessionId: string;
+  /** Claude Code session id, when bound and safe to record. */
+  claudeSessionId: string;
+  /** Classification label persisted for diagnostics: agent / leader / ambiguous / unknown. */
+  classification: AttributionConfidence;
+  /** Matched agent id; empty for leader/unknown/ambiguous. */
   agentId: string;
-  confidence: AttributionConfidence;
-  method: AttributionMethod;
-  /** Leader detector version when confidence is "leader"; "" otherwise. Recorded in logs. */
-  detectorVersion: string;
-  routingReason: string;
-  fallbackReason: string;
-  /** All matching candidate agent ids (populated for ambiguous; logged in diagnostics). */
+  /** All matching candidate agent ids (populated for ambiguous). */
   candidateAgentIds: string[];
+  attributionMethod: AttributionMethod;
+  attributionConfidence: AttributionConfidence;
+  /** Leader detector version when classification is leader; "" otherwise. */
+  detectorVersion: string;
+  /** Matched leader anchors when classification is leader. */
+  matchedLeaderAnchors: string[];
+  /** Registry generation the classification operated on. */
+  registryGeneration: number;
+  routingReason: string;
+  selectedProviderId: string;
+  selectedModel: string;
+  fallbackReason: string;
   createdAt: string;
 };
 

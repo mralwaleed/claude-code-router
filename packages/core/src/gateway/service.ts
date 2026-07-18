@@ -48,13 +48,17 @@ import { handleNetworkCaptureMcpRequest, isNetworkCaptureMcpPath } from "@ccr/co
 import { BROWSER_AUTOMATION_MCP_PATH, TOOL_HUB_MCP_SERVER_NAME, browserAutomationMcpEnabled, toolHubBuiltInBackendServers, toolHubMcpRuntimeConfig, toolHubRequestTimeoutMs } from "@ccr/core/mcp/toolhub-config";
 import { pluginService } from "@ccr/core/plugins/service";
 import { proxyService } from "@ccr/core/proxy/service";
-import { createSseErrorDetector, recordGatewayRequestLog, updateGatewayRequestLogFromRawTrace, type RequestLogRawTraceUpdateInput } from "@ccr/core/observability/request-log-store";
+import { annotateRequestLogSwarm, createSseErrorDetector, recordGatewayRequestLog, updateGatewayRequestLogFromRawTrace, type RequestLogRawTraceUpdateInput } from "@ccr/core/observability/request-log-store";
 import { recordGatewayUsageCapture } from "@ccr/core/usage/store";
 import { ClaudeCodeRouterPlugin, normalizeRouteSelector } from "@ccr/core/gateway/claude-code-router-plugin";
 import { SwarmAuth, extractClaudeSessionId, recoverSessionsOnBoot } from "@ccr/core/swarm/session";
 import { SwarmStore } from "@ccr/core/swarm/store";
 import { isSwarmToken } from "@ccr/core/swarm/token";
-import type { SwarmSession } from "@ccr/core/swarm/contracts";
+import { SwarmAgentRegistry } from "@ccr/core/swarm/registry";
+import { resolveSwarmRequest, type SwarmRequestContext } from "@ccr/core/swarm/routing";
+import { buildSwarmAttribution } from "@ccr/core/swarm/attribution";
+import { providerViewsFromConfig } from "@ccr/core/swarm/validation";
+import type { SwarmAttribution, SwarmSession } from "@ccr/core/swarm/contracts";
 import { ccrRemoteControlPathPrefix, ccrRemoteControlService } from "@ccr/core/gateway/remote-control-service";
 import {
   claudeCodeEffectiveMaxInputTokens,
@@ -333,6 +337,7 @@ class GatewayService {
   private plugin?: ClaudeCodeRouterPlugin;
   private swarmStore?: SwarmStore;
   private swarmAuth?: SwarmAuth;
+  private readonly swarmRegistries = new Map<string, SwarmAgentRegistry>();
   private readonly pendingRawTraceUpdates = new Map<string, PendingRawTraceUpdate>();
   private readonly rawTraceSyncToken = randomUUID();
   private server?: Server;
@@ -362,6 +367,39 @@ class GatewayService {
       this.swarmAuth = new SwarmAuth(this.swarmStore);
     }
     return this.swarmAuth;
+  }
+
+  /**
+   * Build the per-request Swarm context: profile + an immutable registry snapshot + provider
+   * views. The registry is scanned ONCE per swarm (cached) and never rescanned per request.
+   * Returns undefined when the profile is missing/disabled or the registry cannot load
+   * (caller falls through to existing CCR routing — fail-open).
+   */
+  private async getSwarmRequestContext(session: SwarmSession): Promise<SwarmRequestContext | undefined> {
+    if (!this.swarmStore || !this.config) {
+      return undefined;
+    }
+    try {
+      const profile = await this.swarmStore.getProfile(session.swarmId);
+      if (!profile || !profile.enabled) {
+        return undefined;
+      }
+      const providers = providerViewsFromConfig(this.config.Providers);
+      let registry = this.swarmRegistries.get(session.swarmId);
+      if (!registry) {
+        registry = new SwarmAgentRegistry({
+          swarmId: session.swarmId,
+          agentDirectories: profile.agentDirectories,
+          providers,
+          watch: true
+        });
+        await registry.initialScan();
+        this.swarmRegistries.set(session.swarmId, registry);
+      }
+      return { session, profile, registry: registry.getRegistrySnapshot(), providers };
+    } catch {
+      return undefined; // fail-open: never break the request on registry problems
+    }
   }
 
   setBrowserAutomationMcpIntegration(integration: BrowserAutomationMcpIntegration): void {
@@ -518,6 +556,10 @@ class GatewayService {
     // Re-evaluate Swarm auth namespace against the new config (lazy getSwarmAuth will re-init).
     this.swarmAuth = undefined;
     this.swarmStore = undefined;
+    for (const registry of this.swarmRegistries.values()) {
+      void registry.dispose();
+    }
+    this.swarmRegistries.clear();
     proxyService.updateConfig(config);
     this.status = {
       ...this.status,
@@ -757,6 +799,7 @@ class GatewayService {
     let bodyToForward: Buffer | undefined = cursorCompatPreparation?.body ?? requestBody;
     let routeFallback = this.config.Router.fallback;
     let routedModel: string | undefined;
+    let swarmAttribution: SwarmAttribution | undefined;
     let codexApplyPatchBridgeActive = false;
     const claudeModelRewrite = prepareClaudeCodeDiscoveredModelRequest(this.config, request.headers, method, path, bodyToForward);
     if (claudeModelRewrite) {
@@ -838,6 +881,7 @@ class GatewayService {
           statusCode,
           url: requestUrl
         });
+        await annotateRequestLogSwarm(requestId, swarmAttribution);
         const pendingRawTraceUpdate = this.takePendingRawTraceUpdate(requestId);
         if (pendingRawTraceUpdate) {
           await updateGatewayRequestLogFromRawTrace(pendingRawTraceUpdate);
@@ -862,11 +906,13 @@ class GatewayService {
 
     if (method === "POST" && path === "/v1/messages") {
       const body = parseJsonObject(bodyToForward ?? requestBody);
+      const swarmCtx = swarmSession ? await this.getSwarmRequestContext(swarmSession) : undefined;
       const routed = await this.plugin.routeRequest({
         body,
         headers: headers as Record<string, string | string[] | undefined>,
         method,
-        url: request.url ?? path
+        url: request.url ?? path,
+        swarm: swarmCtx
       });
       const serialized = Buffer.from(`${JSON.stringify(routed.body)}\n`, "utf8");
       headers["content-type"] = "application/json";
@@ -877,6 +923,21 @@ class GatewayService {
         routedModel = routed.decision.model;
       }
       bodyToForward = serialized;
+      // Persist Swarm attribution (fail-open: never break routing on persistence problems).
+      if (routed.swarm && swarmSession) {
+        try {
+          swarmAttribution = buildSwarmAttribution({
+            requestId: randomUUID(),
+            session: swarmSession,
+            diagnostics: routed.swarm.diagnostics,
+            routing: routed.swarm.routing,
+            now: new Date().toISOString()
+          });
+          void this.swarmStore?.recordAttribution(swarmAttribution);
+        } catch {
+          // fail-open: attribution is best-effort
+        }
+      }
     }
     if (method === "POST" && requestProtocolForPath(path) === "openai_responses" && isCodexUserAgent(request.headers)) {
       const body = parseJsonObject(bodyToForward ?? requestBody);
