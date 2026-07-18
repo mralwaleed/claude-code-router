@@ -174,7 +174,22 @@ const webClientBridge: CcrApi = {
   updateCheck: () => rpc("updateCheck") as ReturnType<CcrApi["updateCheck"]>,
   updateDownload: () => rpc("updateDownload") as ReturnType<CcrApi["updateDownload"]>,
   updateInstall: () => rpc("updateInstall") as ReturnType<CcrApi["updateInstall"]>,
-  waitBotGatewayQrLogin: (request) => rpc("waitBotGatewayQrLogin", [request]) as ReturnType<CcrApi["waitBotGatewayQrLogin"]>
+  waitBotGatewayQrLogin: (request) => rpc("waitBotGatewayQrLogin", [request]) as ReturnType<CcrApi["waitBotGatewayQrLogin"]>,
+  // Swarm management
+  swarmList: () => rpc("swarmList") as ReturnType<CcrApi["swarmList"]>,
+  swarmGet: (id) => rpc("swarmGet", [id]) as ReturnType<CcrApi["swarmGet"]>,
+  swarmCreate: (input) => rpc("swarmCreate", [input]) as ReturnType<CcrApi["swarmCreate"]>,
+  swarmUpdate: (id, input) => rpc("swarmUpdate", [id, input]) as ReturnType<CcrApi["swarmUpdate"]>,
+  swarmDelete: (id) => rpc("swarmDelete", [id]) as ReturnType<CcrApi["swarmDelete"]>,
+  swarmSetEnabled: (id, enabled) => rpc("swarmSetEnabled", [id, enabled]) as ReturnType<CcrApi["swarmSetEnabled"]>,
+  swarmScan: (id) => rpc("swarmScan", [id]) as ReturnType<CcrApi["swarmScan"]>,
+  swarmValidate: (id) => rpc("swarmValidate", [id]) as ReturnType<CcrApi["swarmValidate"]>,
+  swarmLaunch: (id) => rpc("swarmLaunch", [id]) as ReturnType<CcrApi["swarmLaunch"]>,
+  swarmStop: (sessionId) => rpc("swarmStop", [sessionId]) as ReturnType<CcrApi["swarmStop"]>,
+  swarmSessions: (swarmId) => rpc("swarmSessions", [swarmId]) as ReturnType<CcrApi["swarmSessions"]>,
+  swarmRegistrySnapshot: (id) => rpc("swarmRegistrySnapshot", [id]) as ReturnType<CcrApi["swarmRegistrySnapshot"]>,
+  swarmDiagnostics: (id) => rpc("swarmDiagnostics", [id]) as ReturnType<CcrApi["swarmDiagnostics"]>,
+  swarmRecentAttributions: (swarmId) => rpc("swarmRecentAttributions", [swarmId]) as ReturnType<CcrApi["swarmRecentAttributions"]>
 };
 
 if (!window.ccr) {
