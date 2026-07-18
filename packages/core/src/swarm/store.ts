@@ -157,10 +157,42 @@ export class SwarmStore {
 
   async listActiveSessions(): Promise<SwarmSession[]> {
     return this.run([], (db) =>
-      queryRows(db, "SELECT session_json FROM swarm_sessions WHERE status = 'active' ORDER BY last_seen_at DESC")
+      queryRows(db, "SELECT session_json FROM swarm_sessions WHERE status IN ('active','reattached') ORDER BY last_seen_at DESC")
         .map((row) => parseJson<SwarmSession>(row.session_json))
         .filter((value): value is SwarmSession => Boolean(value))
     );
+  }
+
+  /** All sessions (any status) — used for deterministic restart recovery. */
+  async listSessions(): Promise<SwarmSession[]> {
+    return this.run([], (db) =>
+      queryRows(db, "SELECT session_json FROM swarm_sessions ORDER BY started_at DESC")
+        .map((row) => parseJson<SwarmSession>(row.session_json))
+        .filter((value): value is SwarmSession => Boolean(value))
+    );
+  }
+
+  /** Bind a Claude Code session id to a session (once). No-op if already bound to the same id. */
+  async bindClaudeSession(sessionId: string, claudeSessionId: string): Promise<boolean> {
+    return this.run(false, (db) => {
+      const rows = queryRows(db, "SELECT session_json FROM swarm_sessions WHERE id = ?", [sessionId]);
+      if (!rows.length) {
+        return false;
+      }
+      const session = parseJson<SwarmSession>(rows[0].session_json);
+      if (!session) {
+        return false;
+      }
+      if (session.claudeSessionId && session.claudeSessionId !== claudeSessionId) {
+        return false; // already bound to a different id — refuse rebinding
+      }
+      if (session.claudeSessionId === claudeSessionId) {
+        return true; // already bound to the same id
+      }
+      session.claudeSessionId = claudeSessionId;
+      db.prepare("UPDATE swarm_sessions SET session_json = ? WHERE id = ?").run(JSON.stringify(session), sessionId);
+      return true;
+    });
   }
 
   async updateSessionStatus(id: string, status: SwarmSession["status"], endedAt: string): Promise<void> {

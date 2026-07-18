@@ -40,7 +40,7 @@ import {
 import { findProviderPresetByBaseUrl, providerApiKeySafetyIssue } from "@ccr/core/providers/presets/index";
 import { normalizeProviderBaseUrl as normalizeProviderBaseUrlInput } from "@ccr/core/providers/url";
 import { backendService } from "@ccr/core/plugins/backend-service";
-import { RAW_TRACE_SPOOL_DIR } from "@ccr/core/config/constants";
+import { RAW_TRACE_SPOOL_DIR, SWARMS_DB_FILE } from "@ccr/core/config/constants";
 import { loadPersistedApiKeys } from "@ccr/core/config/api-key-store";
 import { codexDefaultBaseUrl, readCodexAuth } from "@ccr/core/agents/local-providers/service";
 import { fetchWithSystemProxy, getSystemProxyUrlForProtocol } from "@ccr/core/proxy/system-proxy-fetch";
@@ -51,6 +51,10 @@ import { proxyService } from "@ccr/core/proxy/service";
 import { createSseErrorDetector, recordGatewayRequestLog, updateGatewayRequestLogFromRawTrace, type RequestLogRawTraceUpdateInput } from "@ccr/core/observability/request-log-store";
 import { recordGatewayUsageCapture } from "@ccr/core/usage/store";
 import { ClaudeCodeRouterPlugin, normalizeRouteSelector } from "@ccr/core/gateway/claude-code-router-plugin";
+import { SwarmAuth, extractClaudeSessionId, recoverSessionsOnBoot } from "@ccr/core/swarm/session";
+import { SwarmStore } from "@ccr/core/swarm/store";
+import { isSwarmToken } from "@ccr/core/swarm/token";
+import type { SwarmSession } from "@ccr/core/swarm/contracts";
 import { ccrRemoteControlPathPrefix, ccrRemoteControlService } from "@ccr/core/gateway/remote-control-service";
 import {
   claudeCodeEffectiveMaxInputTokens,
@@ -252,7 +256,10 @@ const localObservabilityHeaderNames = new Set([
   "x-ccr-cursor-openai-compat",
   "x-ccr-logical-provider",
   "x-ccr-provider-credential-chain",
-  "x-ccr-provider-credential-saturated"
+  "x-ccr-provider-credential-saturated",
+  "x-ccr-swarm-session-id",
+  "x-ccr-swarm-id",
+  "x-ccr-swarm-agent-id"
 ]);
 const proxyHeaderDenyList = new Set(["connection", coreGatewayAuthHeader, "host", "upgrade"]);
 const responseHeaderDenyList = new Set(["connection", "content-encoding", "transfer-encoding"]);
@@ -324,6 +331,8 @@ class GatewayService {
   private config?: AppConfig;
   private coreAuthToken = "";
   private plugin?: ClaudeCodeRouterPlugin;
+  private swarmStore?: SwarmStore;
+  private swarmAuth?: SwarmAuth;
   private readonly pendingRawTraceUpdates = new Map<string, PendingRawTraceUpdate>();
   private readonly rawTraceSyncToken = randomUUID();
   private server?: Server;
@@ -337,6 +346,22 @@ class GatewayService {
 
   setBrowserWebSearchMcpIntegration(integration: BrowserWebSearchMcpIntegration): void {
     this.browserWebSearchMcpIntegration = integration;
+  }
+
+  /**
+   * Dedicated internal Swarm auth namespace. Returns undefined when the feature flag is off (no
+   * runtime cost, gateway behaves identically to a build without Swarm). Lazy-initializes the
+   * SwarmStore + SwarmAuth; never touches provider API keys.
+   */
+  private getSwarmAuth(): SwarmAuth | undefined {
+    if (!this.config?.swarm?.enabled) {
+      return undefined;
+    }
+    if (!this.swarmAuth) {
+      this.swarmStore = new SwarmStore(SWARMS_DB_FILE);
+      this.swarmAuth = new SwarmAuth(this.swarmStore);
+    }
+    return this.swarmAuth;
   }
 
   setBrowserAutomationMcpIntegration(integration: BrowserAutomationMcpIntegration): void {
@@ -357,6 +382,19 @@ class GatewayService {
     this.config = config;
     this.coreAuthToken = generateCoreGatewayAuthToken();
     this.plugin = new ClaudeCodeRouterPlugin(config);
+    this.swarmAuth = undefined;
+    this.swarmStore = undefined;
+    if (config.swarm?.enabled) {
+      // Deterministic restart recovery: expire sessions whose TTL elapsed while down.
+      try {
+        const bootStore = new SwarmStore(SWARMS_DB_FILE);
+        this.swarmStore = bootStore;
+        this.swarmAuth = new SwarmAuth(bootStore);
+        void recoverSessionsOnBoot(bootStore).catch(() => undefined);
+      } catch {
+        // fail-open: Swarm unavailable, normal routing continues
+      }
+    }
     this.status = {
       coreEndpoint: endpoint(config.gateway.coreHost, config.gateway.corePort),
       endpoint: endpoint(config.gateway.host, config.gateway.port),
@@ -477,6 +515,9 @@ class GatewayService {
     assertLoopbackCoreHost(config.gateway.coreHost);
     this.config = config;
     this.plugin = new ClaudeCodeRouterPlugin(config);
+    // Re-evaluate Swarm auth namespace against the new config (lazy getSwarmAuth will re-init).
+    this.swarmAuth = undefined;
+    this.swarmStore = undefined;
     proxyService.updateConfig(config);
     this.status = {
       ...this.status,
@@ -642,25 +683,43 @@ class GatewayService {
       return;
     }
 
-    const authorization = await authorize(request, response, this.config);
-    if (!authorization.ok) {
-      return;
+    const swarmAuth = this.getSwarmAuth();
+    const swarmToken =
+      swarmAuth && (readAuthToken(request.headers) || readRemoteControlQueryAuthToken(request));
+    let apiKey: ApiKeyConfig | undefined;
+    let swarmSession: SwarmSession | undefined;
+
+    if (swarmAuth && swarmToken && isSwarmToken(swarmToken)) {
+      // Dedicated Swarm auth namespace. A swarm-attempted token that fails is FAIL-CLOSED (401):
+      // it is never authenticated as another swarm nor silently routed as ordinary CCR.
+      const swarmOutcome = await swarmAuth.authenticate(swarmToken);
+      if (!swarmOutcome.ok) {
+        sendJson(response, 401, { error: { message: `Swarm session ${swarmOutcome.reason}.` } });
+        return;
+      }
+      swarmSession = swarmOutcome.session;
+    } else {
+      const authorization = await authorize(request, response, this.config);
+      if (!authorization.ok) {
+        return;
+      }
+      apiKey = authorization.apiKey;
     }
 
     if (request.method === "POST" && path === "/v1/messages/count_tokens") {
       const requestBody = await readRequestBody(request);
       const body = parseJsonObject(requestBody);
-      if (!reserveApiKeyLimits(authorization.apiKey, request, response, requestBody)) {
+      if (apiKey && !reserveApiKeyLimits(apiKey, request, response, requestBody)) {
         return;
       }
       sendJson(response, 200, this.plugin.countTokens(body));
       return;
     }
 
-    await this.proxyRequest(request, response, path, authorization.apiKey);
+    await this.proxyRequest(request, response, path, apiKey, swarmSession);
   }
 
-  private async proxyRequest(request: IncomingMessage, response: ServerResponse, path: string, apiKey?: ApiKeyConfig): Promise<void> {
+  private async proxyRequest(request: IncomingMessage, response: ServerResponse, path: string, apiKey?: ApiKeyConfig, swarmSession?: SwarmSession): Promise<void> {
     if (!this.config || !this.plugin) {
       sendJson(response, 503, { error: { message: "Gateway service is not configured." } });
       return;
@@ -671,9 +730,25 @@ class GatewayService {
       stripLocalGatewayAuthHeaders(headers);
       headers["x-auth-api-key-id"] = apiKey.id;
       headers["x-auth-sub"] = apiKey.id;
+    } else if (swarmSession) {
+      // Swarm namespace: strip the token credential and stamp internal correlation headers.
+      // These headers are in localObservabilityHeaderNames -> omitted before the upstream call.
+      stripLocalGatewayAuthHeaders(headers);
+      headers["x-ccr-swarm-session-id"] = sanitizeHeaderValue(swarmSession.id);
+      headers["x-ccr-swarm-id"] = sanitizeHeaderValue(swarmSession.swarmId);
     }
     const method = request.method ?? "GET";
     const requestBody = await readRequestBody(request);
+    if (swarmSession) {
+      // Bind the Claude Code session id exactly once; reject rebinding (fail-closed).
+      const parsedBody = parseJsonObject(requestBody);
+      const claudeSid = extractClaudeSessionId(parsedBody, request.headers as Record<string, string | string[] | undefined>);
+      const binding = await this.getSwarmAuth()?.bindClaudeSession(swarmSession.id, claudeSid);
+      if (binding && !binding.ok) {
+        sendJson(response, 401, { error: { message: `Swarm session ${binding.reason}.` } });
+        return;
+      }
+    }
     const client = inferGatewayClient(apiKey, request.headers);
     const cursorCompatPreparation = prepareCursorOpenAICompatChatBody(this.config, client, method, path, requestBody);
     if (cursorCompatPreparation) {
@@ -8642,6 +8717,17 @@ function omitLocalObservabilityHeaders(headers: Record<string, string>): Record<
     delete forwarded[name];
   }
   return forwarded;
+}
+
+/**
+ * Test-only: the exact header set that would be forwarded upstream after the Swarm-path
+ * stripping pipeline (forward → strip auth credential → omit local observability). Used to prove
+ * no Swarm metadata (token, session id, workspace, agent metadata) ever reaches a provider.
+ */
+export function forwardedUpstreamHeadersForTest(inbound: IncomingHttpHeaders): Record<string, string> {
+  const forwarded = forwardHeaders(inbound);
+  stripLocalGatewayAuthHeaders(forwarded);
+  return omitLocalObservabilityHeaders(forwarded);
 }
 
 function withCoreGatewayAuthHeader(headers: Record<string, string>, token: string): Record<string, string> {

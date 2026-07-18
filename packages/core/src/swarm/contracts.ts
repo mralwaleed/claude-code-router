@@ -82,7 +82,17 @@ export type SwarmAgent = {
   lastModifiedAt: string;
 };
 
-export type SwarmSessionStatus = "active" | "expired" | "revoked" | "ended";
+/**
+ * Persisted Swarm session lifecycle states. Persisted so restart behaviour is deterministic.
+ * Accepting (request is swarm-routed): "active", "reattached".
+ * Not accepting (fail-closed for that session): "stopped", "expired", "invalid".
+ *   - active     : minted, accepting requests
+ *   - reattached : survived a gateway/desktop restart (first post-restart request confirmed)
+ *   - stopped    : explicitly revoked by the user/UI/CLI
+ *   - expired    : TTL idle or absolute max-lifetime exceeded
+ *   - invalid    : corrupt / unknown / binding-mismatch
+ */
+export type SwarmSessionStatus = "active" | "reattached" | "stopped" | "expired" | "invalid";
 export type SwarmLauncherType = "desktop" | "cli" | "detect";
 
 export type SwarmSession = {
