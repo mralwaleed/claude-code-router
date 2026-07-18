@@ -21,6 +21,15 @@ import type {
   SwarmSession
 } from "@ccr/core/swarm/contracts";
 
+/** Ensure forward-compat: old profiles may lack fallbackPolicy / agentOverrides. */
+function normalizeProfile(profile: SwarmProfile): SwarmProfile {
+  return {
+    ...profile,
+    fallbackPolicy: profile.fallbackPolicy ?? "existing-ccr",
+    agentOverrides: profile.agentOverrides ?? {}
+  };
+}
+
 type SqlDatabase = BetterSqliteDatabase;
 type SqlValue = bigint | Buffer | number | string | null;
 
@@ -52,13 +61,16 @@ export class SwarmStore {
       queryRows(db, "SELECT profile_json FROM swarm_profiles ORDER BY name, rowid")
         .map((row) => parseJson<SwarmProfile>(row.profile_json))
         .filter((value): value is SwarmProfile => Boolean(value))
+        .map(normalizeProfile)
     );
   }
 
   async getProfile(id: string): Promise<SwarmProfile | undefined> {
     return this.run(undefined, (db) => {
       const rows = queryRows(db, "SELECT profile_json FROM swarm_profiles WHERE id = ?", [id]);
-      return rows.length ? parseJson<SwarmProfile>(rows[0].profile_json) ?? undefined : undefined;
+      if (!rows.length) return undefined;
+      const profile = parseJson<SwarmProfile>(rows[0].profile_json);
+      return profile ? normalizeProfile(profile) : undefined;
     });
   }
 
@@ -254,6 +266,14 @@ export class SwarmStore {
         attribution.createdAt,
         JSON.stringify(attribution)
       );
+    });
+  }
+
+  /** Lightweight COUNT of attributions for a session (indexed, no full scan). */
+  async countAttributionsBySession(sessionId: string): Promise<number> {
+    return this.run(0, (db) => {
+      const rows = queryRows(db, "SELECT COUNT(*) as n FROM swarm_attributions WHERE swarm_session_id = ?", [sessionId]);
+      return Number(rows[0]?.n ?? 0);
     });
   }
 

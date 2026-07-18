@@ -34,7 +34,7 @@ function profile(overrides = {}) {
     leaderProviderId: "prov-a", leaderModel: "a-model",
     defaultProviderId: "prov-b", defaultModel: "b-model",
     fallbackProviderId: "", fallbackModel: "",
-    routingMode: "exact", autoDetectWorkspace: false, watchFiles: true, createdAt: "", updatedAt: "",
+    routingMode: "exact", fallbackPolicy: "existing-ccr", autoDetectWorkspace: false, watchFiles: true, agentOverrides: {}, createdAt: "", updatedAt: "",
     ...overrides
   };
 }

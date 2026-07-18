@@ -97,5 +97,8 @@ export const IPC_CHANNELS = {
   appSwarmSessions: "ccr:app:swarm:sessions",
   appSwarmRegistrySnapshot: "ccr:app:swarm:registry-snapshot",
   appSwarmDiagnostics: "ccr:app:swarm:diagnostics",
-  appSwarmRecentAttributions: "ccr:app:swarm:recent-attributions"
+  appSwarmRecentAttributions: "ccr:app:swarm:recent-attributions",
+  appSwarmSetAgentOverride: "ccr:app:swarm:set-agent-override",
+  appSwarmClearAgentOverride: "ccr:app:swarm:clear-agent-override",
+  appSwarmSetAgentEnabled: "ccr:app:swarm:set-agent-enabled"
 } as const;

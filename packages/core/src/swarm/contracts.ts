@@ -16,6 +16,19 @@ export const SWARM_SCHEMA_VERSION = 1;
 /** v1 supports exact-only attribution. Fuzzy/probabilistic matching is intentionally excluded. */
 export type SwarmRoutingMode = "exact";
 
+/** Fallback policy when the Swarm's own assignment is invalid/missing. */
+export type SwarmFallbackPolicy = "existing-ccr" | "swarm-default-required" | "fail-closed";
+
+/** Per-agent UI override (persisted on the Swarm Profile, keyed by agent slug). */
+export type SwarmAgentOverride = {
+  /** Stable provider id; empty = clear provider override. */
+  providerId?: string;
+  /** Model name; empty = clear model override. */
+  model?: string;
+  /** Enabled override (undefined = no override, use frontmatter/default). */
+  enabled?: boolean;
+};
+
 export type SwarmProfile = {
   id: string;
   schemaVersion: number;
@@ -37,8 +50,12 @@ export type SwarmProfile = {
   fallbackProviderId: string;
   fallbackModel: string;
   routingMode: SwarmRoutingMode;
+  /** What happens when a Swarm assignment is invalid/missing. Default "existing-ccr". */
+  fallbackPolicy: SwarmFallbackPolicy;
   autoDetectWorkspace: boolean;
   watchFiles: boolean;
+  /** Per-agent UI overrides keyed by stable agent slug. */
+  agentOverrides: Record<string, SwarmAgentOverride>;
   createdAt: string;
   updatedAt: string;
 };

@@ -152,7 +152,8 @@ export class SwarmManagement {
       swarmId: id,
       agentDirectories: profile.agentDirectories,
       providers: this.providers,
-      watch: this.watch
+      watch: this.watch,
+      agentOverrides: profile.agentOverrides
     });
     await reg.initialScan();
     this.registries.set(id, reg);
@@ -235,7 +236,45 @@ export class SwarmManagement {
 
   async listSessions(swarmId: string): Promise<SwarmSessionDto[]> {
     const active = await this.store.listActiveSessions();
-    return active.filter((s) => s.swarmId === swarmId).map(toSessionDto);
+    const dtos = active.filter((s) => s.swarmId === swarmId).map(toSessionDto);
+    // Attach routing activity count per session (lightweight indexed COUNT)
+    for (const dto of dtos) {
+      (dto as SwarmSessionDto & { routingActivityCount: number }).routingActivityCount =
+        await this.store.countAttributionsBySession(dto.id);
+    }
+    return dtos;
+  }
+
+  // ---- Per-agent overrides ----
+
+  async setAgentOverride(swarmId: string, slug: string, override: { providerId?: string; model?: string; enabled?: boolean }): Promise<void> {
+    const profile = await this.store.getProfile(swarmId);
+    if (!profile) return;
+    const overrides = { ...profile.agentOverrides };
+    overrides[slug] = { ...overrides[slug], ...override };
+    await this.store.upsertProfile({ ...profile, agentOverrides: overrides, updatedAt: this.now() });
+    await this.invalidateRegistry(swarmId);
+  }
+
+  async clearAgentOverride(swarmId: string, slug: string): Promise<void> {
+    const profile = await this.store.getProfile(swarmId);
+    if (!profile) return;
+    const overrides = { ...profile.agentOverrides };
+    delete overrides[slug];
+    await this.store.upsertProfile({ ...profile, agentOverrides: overrides, updatedAt: this.now() });
+    await this.invalidateRegistry(swarmId);
+  }
+
+  async setAgentEnabled(swarmId: string, slug: string, enabled: boolean): Promise<void> {
+    await this.setAgentOverride(swarmId, slug, { enabled });
+  }
+
+  private async invalidateRegistry(swarmId: string): Promise<void> {
+    const reg = this.registries.get(swarmId);
+    if (reg) {
+      await reg.dispose();
+      this.registries.delete(swarmId);
+    }
   }
 
   async diagnostics(id: string): Promise<SwarmDiagnosticsDto> {

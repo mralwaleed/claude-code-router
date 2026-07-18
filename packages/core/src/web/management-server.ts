@@ -443,7 +443,10 @@ const rpcHandlers: Record<string, RpcHandler> = {
   swarmSessions: async (swarmId) => { const m = await getSwarmManagementForWeb(); return m && typeof swarmId === "string" ? m.listSessions(swarmId) : []; },
   swarmRegistrySnapshot: async (id) => { const m = await getSwarmManagementForWeb(); return m && typeof id === "string" ? m.getRegistry(id) : []; },
   swarmDiagnostics: async (id) => { const m = await getSwarmManagementForWeb(); return m && typeof id === "string" ? m.diagnostics(id) : { profileErrors: ["disabled"], profileWarnings: [], agentErrors: [], watcherStatus: "stopped", registryGeneration: 0, activeSessionCount: 0, recentAttributions: [] }; },
-  swarmRecentAttributions: async (swarmId) => { const m = await getSwarmManagementForWeb(); return m && typeof swarmId === "string" ? m.recentAttributions(swarmId) : []; }
+  swarmRecentAttributions: async (swarmId) => { const m = await getSwarmManagementForWeb(); return m && typeof swarmId === "string" ? m.recentAttributions(swarmId) : []; },
+  swarmSetAgentOverride: async (swarmId, slug, override) => { const m = await getSwarmManagementForWeb(); if (m && typeof swarmId === "string" && typeof slug === "string") await m.setAgentOverride(swarmId, slug, override as any); },
+  swarmClearAgentOverride: async (swarmId, slug) => { const m = await getSwarmManagementForWeb(); if (m && typeof swarmId === "string" && typeof slug === "string") await m.clearAgentOverride(swarmId, slug); },
+  swarmSetAgentEnabled: async (swarmId, slug, enabled) => { const m = await getSwarmManagementForWeb(); if (m && typeof swarmId === "string" && typeof slug === "string" && typeof enabled === "boolean") await m.setAgentEnabled(swarmId, slug, enabled); }
 };
 
 let webSwarmManagement: SwarmManagement | undefined;

@@ -90,6 +90,24 @@ export function resolveSwarmRouting(args: {
   if (resolved) {
     return { owns: true, model: resolved.model, providerId: resolved.providerId, reason: resolved.reason };
   }
+
+  // Primary assignment unresolved — apply fallback policy
+  const policy = profile.fallbackPolicy ?? "existing-ccr";
+
+  if (policy === "swarm-default-required" && (classification.kind === "agent" || classification.kind === "leader")) {
+    const fallbackToDefault = resolveAssignmentWithReason(profile.defaultProviderId, profile.defaultModel, SWARM_ROUTING_REASON.defaultUnknown, providers)
+      ?? resolveAssignmentWithReason(profile.fallbackProviderId, profile.fallbackModel, SWARM_ROUTING_REASON.defaultUnknown, providers);
+    if (fallbackToDefault) {
+      return { owns: true, model: fallbackToDefault.model, providerId: fallbackToDefault.providerId, reason: fallbackToDefault.reason };
+    }
+  }
+
+  if (policy === "fail-closed") {
+    // No fallback to CCR; Swarm owns the request but has no valid model → controlled failure.
+    return { owns: true, reason: SWARM_ROUTING_REASON.assignmentInvalid };
+  }
+
+  // existing-ccr (default): decline → existing CCR routing handles the request
   return { owns: false, reason: SWARM_ROUTING_REASON.assignmentInvalid };
 }
 

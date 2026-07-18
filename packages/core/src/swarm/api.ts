@@ -40,6 +40,7 @@ export type SwarmSessionDto = {
   endedAt: string;
   status: SwarmSession["status"];
   launcherType: SwarmSession["launcherType"];
+  routingActivityCount: number;
 };
 
 export type SwarmAttributionDto = {
@@ -102,7 +103,8 @@ export function toSessionDto(session: SwarmSession): SwarmSessionDto {
     lastSeenAt: session.lastSeenAt,
     endedAt: session.endedAt,
     status: session.status,
-    launcherType: session.launcherType
+    launcherType: session.launcherType,
+    routingActivityCount: 0
   };
 }
 

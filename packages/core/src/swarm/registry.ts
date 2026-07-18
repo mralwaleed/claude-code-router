@@ -39,6 +39,7 @@ export type SwarmRegistryOptions = {
   watch?: boolean;
   debounceMs?: number;
   now?: () => string;
+  agentOverrides?: Record<string, import("@ccr/core/swarm/contracts").SwarmAgentOverride>;
 };
 
 const EMPTY_SNAPSHOT = (swarmId: string): RegistrySnapshot => ({
@@ -60,6 +61,7 @@ export class SwarmAgentRegistry {
   private readonly watch: boolean;
   private readonly debounceMs: number | undefined;
   private readonly now: () => string;
+  private readonly agentOverrides: Record<string, import("@ccr/core/swarm/contracts").SwarmAgentOverride>;
   private watcher?: SwarmAgentWatcher;
   private chain: Promise<unknown> = Promise.resolve();
 
@@ -69,6 +71,7 @@ export class SwarmAgentRegistry {
     this.providers = options.providers;
     this.watch = options.watch ?? true;
     this.debounceMs = options.debounceMs;
+    this.agentOverrides = { ...(options.agentOverrides ?? {}) };
     this.now = options.now ?? (() => new Date().toISOString());
     this.snapshotValue = EMPTY_SNAPSHOT(this.swarmId);
   }
@@ -125,11 +128,27 @@ export class SwarmAgentRegistry {
     this.watcher.start();
   }
 
+  private applyAgentOverrides(agents: ScannedAgent[]): ScannedAgent[] {
+    if (Object.keys(this.agentOverrides).length === 0) return agents;
+    return agents.map((agent) => {
+      const override = this.agentOverrides[agent.slug];
+      if (!override) return agent;
+      const hasProviderOrModel = override.providerId !== undefined || override.model !== undefined;
+      return {
+        ...agent,
+        providerOverrideId: override.providerId ?? agent.providerOverrideId,
+        modelOverride: override.model ?? agent.modelOverride,
+        assignmentSource: hasProviderOrModel ? ("override" as const) : agent.assignmentSource,
+        enabled: override.enabled ?? agent.enabled,
+      };
+    });
+  }
+
   private doRescan(initial: boolean): RegistrySnapshot {
     const generation = this.snapshotValue.generation + 1;
     const now = this.now();
     const result = scanAgentDirectories(this.agentDirectories, this.swarmId, this.providers, { generation, now });
-    const agents = this.applyRetainLastValid(result.agents, generation, now);
+    const agents = this.applyAgentOverrides(this.applyRetainLastValid(result.agents, generation, now));
     this.snapshotValue = this.buildSnapshot(agents, result.diagnostics, generation, now);
     if (initial) {
       this.startWatcher();
@@ -150,7 +169,7 @@ export class SwarmAgentRegistry {
         next = loaded.agent;
       }
     } catch {
-      next = undefined; // file is gone -> treated as removal below
+      next = undefined;
     }
 
     const remaining = this.snapshotValue.agents.filter((agent) => agent.sourceFile !== absolute);
@@ -158,7 +177,8 @@ export class SwarmAgentRegistry {
       remaining.push(next);
     }
     const withRetain = this.applyRetainLastValid(remaining, generation, now);
-    const finalized = applyDuplicateDetection(withRetain);
+    const withOverrides = this.applyAgentOverrides(withRetain);
+    const finalized = applyDuplicateDetection(withOverrides);
     this.snapshotValue = this.buildSnapshot(finalized, this.snapshotValue.diagnostics, generation, now);
     return this.snapshotValue;
   }

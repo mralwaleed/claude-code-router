@@ -189,7 +189,10 @@ const webClientBridge: CcrApi = {
   swarmSessions: (swarmId) => rpc("swarmSessions", [swarmId]) as ReturnType<CcrApi["swarmSessions"]>,
   swarmRegistrySnapshot: (id) => rpc("swarmRegistrySnapshot", [id]) as ReturnType<CcrApi["swarmRegistrySnapshot"]>,
   swarmDiagnostics: (id) => rpc("swarmDiagnostics", [id]) as ReturnType<CcrApi["swarmDiagnostics"]>,
-  swarmRecentAttributions: (swarmId) => rpc("swarmRecentAttributions", [swarmId]) as ReturnType<CcrApi["swarmRecentAttributions"]>
+  swarmRecentAttributions: (swarmId) => rpc("swarmRecentAttributions", [swarmId]) as ReturnType<CcrApi["swarmRecentAttributions"]>,
+  swarmSetAgentOverride: (swarmId, slug, override) => rpc("swarmSetAgentOverride", [swarmId, slug, override]) as ReturnType<CcrApi["swarmSetAgentOverride"]>,
+  swarmClearAgentOverride: (swarmId, slug) => rpc("swarmClearAgentOverride", [swarmId, slug]) as ReturnType<CcrApi["swarmClearAgentOverride"]>,
+  swarmSetAgentEnabled: (swarmId, slug, enabled) => rpc("swarmSetAgentEnabled", [swarmId, slug, enabled]) as ReturnType<CcrApi["swarmSetAgentEnabled"]>
 };
 
 if (!window.ccr) {

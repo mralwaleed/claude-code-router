@@ -203,5 +203,8 @@ contextBridge.exposeInMainWorld("ccr", {
   swarmSessions: (swarmId: string) => invoke(IPC_CHANNELS.appSwarmSessions, swarmId),
   swarmRegistrySnapshot: (id: string) => invoke(IPC_CHANNELS.appSwarmRegistrySnapshot, id),
   swarmDiagnostics: (id: string) => invoke(IPC_CHANNELS.appSwarmDiagnostics, id),
-  swarmRecentAttributions: (swarmId: string) => invoke(IPC_CHANNELS.appSwarmRecentAttributions, swarmId)
+  swarmRecentAttributions: (swarmId: string) => invoke(IPC_CHANNELS.appSwarmRecentAttributions, swarmId),
+  swarmSetAgentOverride: (swarmId: string, slug: string, override: unknown) => invoke(IPC_CHANNELS.appSwarmSetAgentOverride, swarmId, slug, override),
+  swarmClearAgentOverride: (swarmId: string, slug: string) => invoke(IPC_CHANNELS.appSwarmClearAgentOverride, swarmId, slug),
+  swarmSetAgentEnabled: (swarmId: string, slug: string, enabled: boolean) => invoke(IPC_CHANNELS.appSwarmSetAgentEnabled, swarmId, slug, enabled)
 });

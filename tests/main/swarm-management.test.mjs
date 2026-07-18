@@ -34,8 +34,10 @@ const baseInput = {
   fallbackProviderId: "",
   fallbackModel: "",
   routingMode: "exact",
+  fallbackPolicy: "existing-ccr",
   autoDetectWorkspace: false,
-  watchFiles: true
+  watchFiles: true,
+  agentOverrides: {}
 };
 
 test("create + get + list profile", async () => {

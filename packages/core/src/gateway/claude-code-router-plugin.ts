@@ -107,9 +107,14 @@ export class ClaudeCodeRouterPlugin {
       routedModel = customModel;
       reason = "custom-router";
       fallback = this.config.Router.fallback;
-    } else if (swarmResolution?.routing.owns) {
-      body.model = swarmResolution.routing.model as string;
+    } else if (swarmResolution?.routing.owns && swarmResolution.routing.model) {
+      body.model = swarmResolution.routing.model;
       routedModel = swarmResolution.routing.model;
+      reason = swarmResolution.routing.reason;
+      fallback = this.config.Router.fallback;
+    } else if (swarmResolution?.routing.owns && !swarmResolution.routing.model) {
+      // fail-closed: Swarm owns but has no valid model → controlled failure (no fallback to CCR)
+      routedModel = undefined;
       reason = swarmResolution.routing.reason;
       fallback = this.config.Router.fallback;
     } else {

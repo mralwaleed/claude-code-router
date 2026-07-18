@@ -173,6 +173,9 @@ declare global {
       swarmRegistrySnapshot: (id: string) => Promise<SwarmAgentDto[]>;
       swarmDiagnostics: (id: string) => Promise<SwarmDiagnosticsDto>;
       swarmRecentAttributions: (swarmId: string) => Promise<SwarmAttributionDto[]>;
+      swarmSetAgentOverride: (swarmId: string, slug: string, override: { providerId?: string; model?: string; enabled?: boolean }) => Promise<void>;
+      swarmClearAgentOverride: (swarmId: string, slug: string) => Promise<void>;
+      swarmSetAgentEnabled: (swarmId: string, slug: string, enabled: boolean) => Promise<void>;
     };
   }
 }
