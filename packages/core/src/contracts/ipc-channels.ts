@@ -83,5 +83,19 @@ export const IPC_CHANNELS = {
   browserResolveAutomationHandoff: "ccr:browser:resolve-automation-handoff",
   browserSelectTab: "ccr:browser:select-tab",
   browserStartChromeLoginImport: "ccr:browser:start-chrome-login-import",
-  browserStateChanged: "ccr:browser:state-changed"
+  browserStateChanged: "ccr:browser:state-changed",
+  appSwarmList: "ccr:app:swarm:list",
+  appSwarmGet: "ccr:app:swarm:get",
+  appSwarmCreate: "ccr:app:swarm:create",
+  appSwarmUpdate: "ccr:app:swarm:update",
+  appSwarmDelete: "ccr:app:swarm:delete",
+  appSwarmSetEnabled: "ccr:app:swarm:set-enabled",
+  appSwarmScan: "ccr:app:swarm:scan",
+  appSwarmValidate: "ccr:app:swarm:validate",
+  appSwarmLaunch: "ccr:app:swarm:launch",
+  appSwarmStop: "ccr:app:swarm:stop",
+  appSwarmSessions: "ccr:app:swarm:sessions",
+  appSwarmRegistrySnapshot: "ccr:app:swarm:registry-snapshot",
+  appSwarmDiagnostics: "ccr:app:swarm:diagnostics",
+  appSwarmRecentAttributions: "ccr:app:swarm:recent-attributions"
 } as const;
