@@ -215,7 +215,7 @@ export function SwarmsView() {
                   <p className="font-medium">Recent routing:</p>
                   {diagnostics.recentAttributions.slice(0, 5).map((a) => (
                     <div key={a.requestId} className="mt-1 font-mono text-[11px] text-muted-foreground">
-                      {a.classification} → {a.routingReason} → {a.selectedProviderId}/{a.selectedModel || "—"}
+                      {a.classification} [{a.attributionMethod}]{a.detectorVersion ? ` (${a.detectorVersion})` : ""} → {a.routingReason} → {a.selectedProviderId}/{a.selectedModel || "—"}{a.fallbackReason ? ` [fallback: ${a.fallbackReason}]` : ""}
                     </div>
                   ))}
                 </div>
@@ -295,6 +295,25 @@ type SwarmDraft = {
   watchFiles: boolean;
   autoDetectWorkspace: boolean;
 };
+
+// ---- Exported view-model helpers (testable without React) ----
+
+export function validateSwarmDraft(draft: SwarmDraft): string | null {
+  if (!draft.name.trim()) return "Name is required";
+  if (!draft.leaderProviderId || !draft.leaderModel) return "Leader provider and model are required";
+  if (!draft.defaultProviderId || !draft.defaultModel) return "Default provider and model are required";
+  return null;
+}
+
+export function resetModelOnProviderChange(draft: SwarmDraft, providers: Array<{ id: string; models: string[] }>, providerKey: keyof SwarmDraft): SwarmDraft {
+  const providerId = draft[providerKey] as string;
+  const provider = providers.find((p) => p.id === providerId);
+  const modelKey = providerKey.replace("ProviderId", "Model") as keyof SwarmDraft;
+  if (provider && !provider.models.includes(draft[modelKey] as string)) {
+    return { ...draft, [modelKey]: "" };
+  }
+  return draft;
+}
 
 function emptyDraft(): SwarmDraft {
   return { name: "", description: "", enabled: true, workspaceRoots: "", launchDirectory: "", agentDirectories: "", leaderProviderId: "", leaderModel: "", defaultProviderId: "", defaultModel: "", fallbackProviderId: "", fallbackModel: "", watchFiles: true, autoDetectWorkspace: false };

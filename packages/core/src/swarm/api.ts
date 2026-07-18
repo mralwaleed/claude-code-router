@@ -49,6 +49,8 @@ export type SwarmAttributionDto = {
   classification: string;
   agentId: string;
   candidateAgentIds: string[];
+  attributionMethod: string;
+  detectorVersion: string;
   routingReason: string;
   selectedProviderId: string;
   selectedModel: string;
@@ -112,6 +114,8 @@ export function toAttributionDto(attribution: SwarmAttribution): SwarmAttributio
     classification: attribution.classification,
     agentId: attribution.agentId,
     candidateAgentIds: attribution.candidateAgentIds,
+    attributionMethod: attribution.attributionMethod,
+    detectorVersion: attribution.detectorVersion,
     routingReason: attribution.routingReason,
     selectedProviderId: attribution.selectedProviderId,
     selectedModel: attribution.selectedModel,
