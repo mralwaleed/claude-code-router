@@ -582,6 +582,10 @@ function pickConfig(value: Partial<AppConfig>): LoadedAppConfig {
   if (agent) {
     config.agent = agent;
   }
+  const agentModels = parseAgentModels((value as Record<string, unknown>).agentModels ?? (value as Record<string, unknown>).agent_models);
+  if (agentModels) {
+    config.agentModels = agentModels;
+  }
   const botGateway = parseBotGateway((value as Record<string, unknown>).botGateway ?? (value as Record<string, unknown>).bot_gateway ?? (value as Record<string, unknown>).bot);
   if (botGateway) {
     config.botGateway = botGateway;
@@ -691,6 +695,27 @@ function parseObservability(value: unknown): Partial<ObservabilityConfig> | unde
     observability.agentAnalysis = value.agentAnalysis;
   }
   return Object.keys(observability).length ? observability : undefined;
+}
+
+
+
+function parseAgentModels(value: unknown): Record<string, string> | undefined {
+  if (!isObject(value)) {
+    return undefined;
+  }
+  const result: Record<string, string> = {};
+  for (const [key, raw] of Object.entries(value)) {
+    const slug = key.trim();
+    if (!slug || typeof raw !== "string") {
+      continue;
+    }
+    const selector = raw.trim();
+    if (!selector) {
+      continue;
+    }
+    result[slug] = selector;
+  }
+  return Object.keys(result).length ? result : undefined;
 }
 
 function parseToolHub(value: unknown): Partial<ToolHubConfig> | undefined {
@@ -1081,6 +1106,10 @@ function parseProviders(value: unknown): GatewayProviderConfig[] | undefined {
 
 export function parseProvidersForTest(value: unknown): GatewayProviderConfig[] | undefined {
   return parseProviders(value);
+}
+
+export function parseAgentModelsForTest(value: unknown): Record<string, string> | undefined {
+  return parseAgentModels(value);
 }
 
 function parseModelDescriptions(value: unknown, models: string[]): Record<string, string> | undefined {

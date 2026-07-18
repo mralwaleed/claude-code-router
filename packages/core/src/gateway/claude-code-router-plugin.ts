@@ -8,6 +8,8 @@ import { CONFIGDIR } from "@ccr/core/config/constants";
 type HeaderValue = string | string[] | undefined;
 
 export type MutableRequestLike = {
+  agentDeclaredModel?: string;
+  agentSlug?: string;
   builtInSubagentModel?: string;
   body: Record<string, unknown>;
   headers: Record<string, HeaderValue>;
@@ -60,6 +62,16 @@ export class ClaudeCodeRouterPlugin {
       injectClaudeCodeToolHubInstructions(body, this.config);
       removeClaudeCodeBillingSystemHeader(body);
       request.builtInSubagentModel = extractAndRemoveClaudeCodeSubagentModelTag(body);
+      request.agentDeclaredModel = extractAndRemoveClaudeCodeAgentDeclaredModelTag(body);
+      request.agentSlug = extractAndRemoveClaudeCodeAgentSlugTag(body);
+    } else if (isClaudeCodeUserAgent(input.headers)) {
+      // Static markers are baked into agent files, so they show up in every Claude Code
+      // subagent request. Always strip them (and the billing header) so they never reach
+      // the provider, even when the claude-code built-in rule or profile is disabled.
+      // Routing still requires the full gate, so these are read-only stripped here.
+      removeClaudeCodeBillingSystemHeader(body);
+      request.agentDeclaredModel = extractAndRemoveClaudeCodeAgentDeclaredModelTag(body);
+      request.agentSlug = extractAndRemoveClaudeCodeAgentSlugTag(body);
     }
     const sessionId = resolveSessionId(body, input.headers);
     const tokenCount = calculateTokenCount(body.messages, body.system, body.tools);
@@ -186,6 +198,14 @@ function resolveConfiguredRouteDecision(
   request: MutableRequestLike,
   config: AppConfig
 ): ConfiguredRouteDecision {
+  const agentDeclaredDecision = resolveAgentDeclaredRouteDecision(request, config);
+  if (agentDeclaredDecision) {
+    return agentDeclaredDecision;
+  }
+  const agentSlugDecision = resolveAgentSlugRouteDecision(request, config);
+  if (agentSlugDecision) {
+    return agentSlugDecision;
+  }
   const builtInSubagentDecision = resolveBuiltInClaudeCodeSubagentRouteDecision(request, config);
   if (builtInSubagentDecision) {
     return builtInSubagentDecision;
@@ -261,6 +281,59 @@ function resolveBuiltInClaudeCodeSubagentRouteDecision(
   };
 }
 
+function resolveAgentDeclaredRouteDecision(
+  request: MutableRequestLike,
+  config: AppConfig
+): ConfiguredRouteDecision | undefined {
+  if (!builtInAgentRouteMatches(request, config, "claude-code")) {
+    return undefined;
+  }
+  const target = normalizeRouteSelector(request.agentDeclaredModel);
+  if (!target || isSubagentModelPlaceholder(target) || !isKnownInlineRoute(target, config)) {
+    return undefined;
+  }
+  return {
+    fallback: config.Router.fallback,
+    model: target,
+    reason: "builtin:claude-code-agent-model",
+    rewrite: {
+      key: "request.body.model",
+      operation: "set",
+      value: target
+    }
+  };
+}
+
+function resolveAgentSlugRouteDecision(
+  request: MutableRequestLike,
+  config: AppConfig
+): ConfiguredRouteDecision | undefined {
+  if (!builtInAgentRouteMatches(request, config, "claude-code")) {
+    return undefined;
+  }
+  const slug = request.agentSlug?.trim().toLowerCase();
+  if (!slug) {
+    return undefined;
+  }
+  const entry = Object.entries(config.agentModels ?? {}).find(
+    ([key]) => key.trim().toLowerCase() === slug
+  );
+  const target = normalizeRouteSelector(entry?.[1]);
+  if (!target || isSubagentModelPlaceholder(target) || !isKnownInlineRoute(target, config)) {
+    return undefined;
+  }
+  return {
+    fallback: config.Router.fallback,
+    model: target,
+    reason: "builtin:claude-code-agent-slug",
+    rewrite: {
+      key: "request.body.model",
+      operation: "set",
+      value: target
+    }
+  };
+}
+
 function resolveBuiltInAgentRouteDecision(
   request: MutableRequestLike,
   config: AppConfig
@@ -304,6 +377,11 @@ function builtInAgentRouteMatches(
   return userAgent.includes(builtInAgentUserAgentNeedle(agent));
 }
 
+function isClaudeCodeUserAgent(headers: Record<string, HeaderValue>): boolean {
+  const userAgent = readRequestHeader(headers, "user-agent")?.toLowerCase() ?? "";
+  return userAgent.includes(builtInAgentUserAgentNeedle("claude-code"));
+}
+
 function resolveBuiltInAgentProfile(config: AppConfig, agent: RouterBuiltInAgentRuleId) {
   if (config.profile.enabled === false) {
     return undefined;
@@ -323,6 +401,10 @@ const ccrSubagentModelOpenTag = "<CCR-SUBAGENT-MODEL>";
 const ccrSubagentModelCloseTag = "</CCR-SUBAGENT-MODEL>";
 const ccrSubagentModelTagExample = `${ccrSubagentModelOpenTag}Provider/model${ccrSubagentModelCloseTag}`;
 const ccrSubagentModelPlaceholder = "provider/model";
+const ccrAgentModelOpenTag = "<CCR-AGENT-MODEL>";
+const ccrAgentModelCloseTag = "</CCR-AGENT-MODEL>";
+const ccrAgentSlugOpenTag = "<CCR-AGENT>";
+const ccrAgentSlugCloseTag = "</CCR-AGENT>";
 const claudeCodeBillingSystemHeaderPrefix = "x-anthropic-billing-header";
 const ccrSubagentToolModelInstruction =
   `CCR subagent routing is enabled. When calling this tool, the prompt parameter MUST start with ` +
@@ -617,41 +699,70 @@ function removeClaudeCodeBillingSystemHeader(body: Record<string, unknown>): voi
   }
 }
 
+type TagValueParser = (inner: string) => string | undefined;
+
 function extractAndRemoveClaudeCodeSubagentModelTag(body: Record<string, unknown>): string | undefined {
-  const systemModel = extractAndRemoveSystemSubagentModelTag(body);
-  if (systemModel) {
-    return systemModel;
-  }
-  return extractAndRemoveMessageSubagentModelTag(body);
+  return extractAndRemoveFirstTagFromBody(body, ccrSubagentModelOpenTag, ccrSubagentModelCloseTag, normalizeRouteSelector);
 }
 
-function extractAndRemoveSystemSubagentModelTag(body: Record<string, unknown>): string | undefined {
+function extractAndRemoveClaudeCodeAgentDeclaredModelTag(body: Record<string, unknown>): string | undefined {
+  return extractAndRemoveFirstTagFromBody(body, ccrAgentModelOpenTag, ccrAgentModelCloseTag, normalizeRouteSelector);
+}
+
+function extractAndRemoveClaudeCodeAgentSlugTag(body: Record<string, unknown>): string | undefined {
+  return extractAndRemoveFirstTagFromBody(body, ccrAgentSlugOpenTag, ccrAgentSlugCloseTag, readString);
+}
+
+function extractAndRemoveFirstTagFromBody(
+  body: Record<string, unknown>,
+  openTag: string,
+  closeTag: string,
+  parseValue: TagValueParser
+): string | undefined {
+  const systemValue = extractAndRemoveTagFromSystem(body, openTag, closeTag, parseValue);
+  if (systemValue) {
+    return systemValue;
+  }
+  return extractAndRemoveTagFromMessages(body, openTag, closeTag, parseValue);
+}
+
+function extractAndRemoveTagFromSystem(
+  body: Record<string, unknown>,
+  openTag: string,
+  closeTag: string,
+  parseValue: TagValueParser
+): string | undefined {
   const system = body.system;
   if (typeof system === "string") {
-    return extractAndRemoveSubagentModelTagFromText(system, (text) => {
+    return extractAndRemoveTagFromText(system, (text) => {
       body.system = text;
-    });
+    }, openTag, closeTag, parseValue);
   }
   if (!Array.isArray(system)) {
     return undefined;
   }
   for (let index = 0; index < system.length; index += 1) {
     const block = system[index];
-    const model = extractAndRemoveSubagentModelTagFromContentBlock(block, (text) => {
+    const value = extractAndRemoveTagFromContentBlock(block, (text) => {
       if (typeof block === "string") {
         system[index] = text;
       } else if (isRecord(block)) {
         block.text = text;
       }
-    });
-    if (model) {
-      return model;
+    }, openTag, closeTag, parseValue);
+    if (value) {
+      return value;
     }
   }
   return undefined;
 }
 
-function extractAndRemoveMessageSubagentModelTag(body: Record<string, unknown>): string | undefined {
+function extractAndRemoveTagFromMessages(
+  body: Record<string, unknown>,
+  openTag: string,
+  closeTag: string,
+  parseValue: TagValueParser
+): string | undefined {
   if (!Array.isArray(body.messages)) {
     return undefined;
   }
@@ -661,19 +772,24 @@ function extractAndRemoveMessageSubagentModelTag(body: Record<string, unknown>):
     if (!isRecord(message) || message.role !== "user") {
       continue;
     }
-    const model = extractAndRemoveSubagentModelTagFromMessage(message);
-    if (model) {
-      return model;
+    const value = extractAndRemoveTagFromMessage(message, openTag, closeTag, parseValue);
+    if (value) {
+      return value;
     }
   }
   return undefined;
 }
 
-function extractAndRemoveSubagentModelTagFromMessage(message: Record<string, unknown>): string | undefined {
+function extractAndRemoveTagFromMessage(
+  message: Record<string, unknown>,
+  openTag: string,
+  closeTag: string,
+  parseValue: TagValueParser
+): string | undefined {
   if (typeof message.content === "string") {
-    return extractAndRemoveSubagentModelTagFromText(message.content, (text) => {
+    return extractAndRemoveTagFromText(message.content, (text) => {
       message.content = text;
-    });
+    }, openTag, closeTag, parseValue);
   }
   if (!Array.isArray(message.content)) {
     return undefined;
@@ -681,53 +797,59 @@ function extractAndRemoveSubagentModelTagFromMessage(message: Record<string, unk
   const content = message.content;
   for (let index = 0; index < content.length; index += 1) {
     const block = content[index];
-    const model = extractAndRemoveSubagentModelTagFromContentBlock(block, (text) => {
+    const value = extractAndRemoveTagFromContentBlock(block, (text) => {
       if (typeof block === "string") {
         content[index] = text;
       } else if (isRecord(block)) {
         block.text = text;
       }
-    });
-    if (model) {
-      return model;
+    }, openTag, closeTag, parseValue);
+    if (value) {
+      return value;
     }
   }
   return undefined;
 }
 
-function extractAndRemoveSubagentModelTagFromContentBlock(
+function extractAndRemoveTagFromContentBlock(
   block: unknown,
-  replace: (text: string) => void
+  replace: (text: string) => void,
+  openTag: string,
+  closeTag: string,
+  parseValue: TagValueParser
 ): string | undefined {
   if (typeof block === "string") {
-    return extractAndRemoveSubagentModelTagFromText(block, replace);
+    return extractAndRemoveTagFromText(block, replace, openTag, closeTag, parseValue);
   }
   if (!isRecord(block) || typeof block.text !== "string") {
     return undefined;
   }
-  return extractAndRemoveSubagentModelTagFromText(block.text, replace);
+  return extractAndRemoveTagFromText(block.text, replace, openTag, closeTag, parseValue);
 }
 
-function extractAndRemoveSubagentModelTagFromText(
+function extractAndRemoveTagFromText(
   text: string,
-  replace: (text: string) => void
+  replace: (text: string) => void,
+  openTag: string,
+  closeTag: string,
+  parseValue: TagValueParser
 ): string | undefined {
-  const openIndex = text.indexOf(ccrSubagentModelOpenTag);
+  const openIndex = text.indexOf(openTag);
   if (openIndex < 0) {
     return undefined;
   }
-  const modelStart = openIndex + ccrSubagentModelOpenTag.length;
-  const closeIndex = text.indexOf(ccrSubagentModelCloseTag, modelStart);
+  const valueStart = openIndex + openTag.length;
+  const closeIndex = text.indexOf(closeTag, valueStart);
   if (closeIndex < 0) {
     return undefined;
   }
-  const model = normalizeRouteSelector(text.slice(modelStart, closeIndex));
-  if (!model) {
+  const value = parseValue(text.slice(valueStart, closeIndex));
+  if (!value) {
     return undefined;
   }
-  const nextText = `${text.slice(0, openIndex)}${text.slice(closeIndex + ccrSubagentModelCloseTag.length)}`;
+  const nextText = `${text.slice(0, openIndex)}${text.slice(closeIndex + closeTag.length)}`;
   replace(nextText);
-  return model;
+  return value;
 }
 
 function resolveRouterRule(

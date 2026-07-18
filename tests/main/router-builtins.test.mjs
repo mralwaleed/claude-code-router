@@ -42,7 +42,8 @@ function createRouterPlugin(options = {}) {
       ]
     },
     toolHub: options.toolHub,
-    virtualModelProfiles: options.virtualModelProfiles ?? []
+    virtualModelProfiles: options.virtualModelProfiles ?? [],
+    agentModels: options.agentModels
   });
 }
 
@@ -1207,5 +1208,257 @@ test("built-in Claude Code subagent route ignores tags outside the first two mes
 
   assert.equal(result.body.model, "Provider/claude-sonnet");
   assert.match(result.body.messages[2].content, /Provider\/claude-opus/);
+  assert.equal(result.decision.reason, "builtin:claude-code");
+});
+
+test("agent model tag in a system string routes the subagent and is stripped", async () => {
+  const plugin = createRouterPlugin({ profileModel: "Provider/claude-sonnet" });
+  const result = await plugin.routeRequest({
+    body: {
+      messages: [],
+      model: "claude-default",
+      system: "You are the reviewer. <CCR-AGENT-MODEL>Provider/claude-opus</CCR-AGENT-MODEL>"
+    },
+    headers: { "user-agent": "Claude Code" },
+    method: "POST",
+    url: "/v1/messages"
+  });
+
+  assert.equal(result.body.model, "Provider/claude-opus");
+  assert.equal(result.body.system, "You are the reviewer. ");
+  assert.equal(result.decision.model, "Provider/claude-opus");
+  assert.equal(result.decision.reason, "builtin:claude-code-agent-model");
+});
+
+test("agent model tag in a system array block routes the subagent and is stripped", async () => {
+  const plugin = createRouterPlugin({ profileModel: "Provider/claude-sonnet" });
+  const result = await plugin.routeRequest({
+    body: {
+      messages: [],
+      model: "claude-default",
+      system: [
+        { text: "You are the reviewer.", type: "text" },
+        { text: "<CCR-AGENT-MODEL>Provider/claude-opus</CCR-AGENT-MODEL>", type: "text" }
+      ]
+    },
+    headers: { "user-agent": "Claude Code" },
+    method: "POST",
+    url: "/v1/messages"
+  });
+
+  assert.equal(result.body.model, "Provider/claude-opus");
+  assert.deepEqual(result.body.system, [
+    { text: "You are the reviewer.", type: "text" },
+    { text: "", type: "text" }
+  ]);
+  assert.equal(result.decision.reason, "builtin:claude-code-agent-model");
+});
+
+test("agent model tag in the first user message routes the subagent and is stripped", async () => {
+  const plugin = createRouterPlugin({ profileModel: "Provider/claude-sonnet" });
+  const result = await plugin.routeRequest({
+    body: {
+      messages: [
+        { content: "Do the work <CCR-AGENT-MODEL>Provider/claude-opus</CCR-AGENT-MODEL>", role: "user" }
+      ],
+      model: "claude-default"
+    },
+    headers: { "user-agent": "Claude Code" },
+    method: "POST",
+    url: "/v1/messages"
+  });
+
+  assert.equal(result.body.model, "Provider/claude-opus");
+  assert.equal(result.body.messages[0].content, "Do the work ");
+  assert.equal(result.decision.reason, "builtin:claude-code-agent-model");
+});
+
+test("agent model tag beats the cooperative subagent tag and both are stripped", async () => {
+  const plugin = createRouterPlugin({ profileModel: "Provider/claude-sonnet" });
+  const result = await plugin.routeRequest({
+    body: {
+      messages: [],
+      model: "claude-default",
+      system: "Lead <CCR-AGENT-MODEL>Provider/claude-opus</CCR-AGENT-MODEL> <CCR-SUBAGENT-MODEL>Provider/claude-haiku</CCR-SUBAGENT-MODEL>"
+    },
+    headers: { "user-agent": "Claude Code" },
+    method: "POST",
+    url: "/v1/messages"
+  });
+
+  assert.equal(result.body.model, "Provider/claude-opus");
+  assert.equal(result.body.system, "Lead  ");
+  assert.equal(result.decision.reason, "builtin:claude-code-agent-model");
+});
+
+test("agent model tag beats the profile model while a tagless parent keeps the profile model", async () => {
+  const plugin = createRouterPlugin({ profileModel: "Provider/claude-sonnet" });
+
+  const child = await plugin.routeRequest({
+    body: {
+      messages: [],
+      model: "claude-default",
+      system: "You are a worker. <CCR-AGENT-MODEL>Provider/claude-opus</CCR-AGENT-MODEL>"
+    },
+    headers: { "user-agent": "Claude Code" },
+    method: "POST",
+    url: "/v1/messages"
+  });
+  assert.equal(child.body.model, "Provider/claude-opus");
+  assert.equal(child.decision.reason, "builtin:claude-code-agent-model");
+
+  // The parent agent has no marker of its own, so it stays on the session/profile model.
+  const parent = await plugin.routeRequest({
+    body: {
+      messages: [{ content: "delegate to the worker", role: "user" }],
+      model: "claude-default",
+      system: "You are the team leader."
+    },
+    headers: { "user-agent": "Claude Code" },
+    method: "POST",
+    url: "/v1/messages"
+  });
+  assert.equal(parent.body.model, "Provider/claude-sonnet");
+  assert.equal(parent.decision.reason, "builtin:claude-code");
+});
+
+test("agent model tag ignores the Provider/model placeholder and falls through", async () => {
+  const plugin = createRouterPlugin({ profileModel: "Provider/claude-sonnet" });
+  const result = await plugin.routeRequest({
+    body: {
+      messages: [],
+      model: "claude-default",
+      system: "Use <CCR-AGENT-MODEL>provider/model</CCR-AGENT-MODEL> for this agent."
+    },
+    headers: { "user-agent": "Claude Code" },
+    method: "POST",
+    url: "/v1/messages"
+  });
+
+  assert.equal(result.body.model, "Provider/claude-sonnet");
+  assert.equal(result.body.system, "Use  for this agent.");
+  assert.equal(result.decision.reason, "builtin:claude-code");
+});
+
+test("agent model tag ignores an unknown provider and falls through", async () => {
+  const plugin = createRouterPlugin({ profileModel: "Provider/claude-sonnet" });
+  const result = await plugin.routeRequest({
+    body: {
+      messages: [],
+      model: "claude-default",
+      system: "<CCR-AGENT-MODEL>Nope/claude-opus</CCR-AGENT-MODEL>"
+    },
+    headers: { "user-agent": "Claude Code" },
+    method: "POST",
+    url: "/v1/messages"
+  });
+
+  assert.equal(result.body.model, "Provider/claude-sonnet");
+  assert.equal(result.body.system, "");
+  assert.equal(result.decision.reason, "builtin:claude-code");
+});
+
+test("agent slug tag resolves through the agentModels map and is stripped", async () => {
+  const plugin = createRouterPlugin({
+    profileModel: "Provider/claude-sonnet",
+    agentModels: { "code-reviewer": "Provider/claude-opus" }
+  });
+  const result = await plugin.routeRequest({
+    body: {
+      messages: [],
+      model: "claude-default",
+      system: "You review code. <CCR-AGENT>code-reviewer</CCR-AGENT>"
+    },
+    headers: { "user-agent": "Claude Code" },
+    method: "POST",
+    url: "/v1/messages"
+  });
+
+  assert.equal(result.body.model, "Provider/claude-opus");
+  assert.equal(result.body.system, "You review code. ");
+  assert.equal(result.decision.reason, "builtin:claude-code-agent-slug");
+});
+
+test("agent slug lookup is case-insensitive and trims whitespace", async () => {
+  const plugin = createRouterPlugin({
+    profileModel: "Provider/claude-sonnet",
+    agentModels: { "Code-Reviewer": "Provider/claude-opus" }
+  });
+  const result = await plugin.routeRequest({
+    body: {
+      messages: [],
+      model: "claude-default",
+      system: "<CCR-AGENT>  code-reviewer  </CCR-AGENT>"
+    },
+    headers: { "user-agent": "Claude Code" },
+    method: "POST",
+    url: "/v1/messages"
+  });
+
+  assert.equal(result.body.model, "Provider/claude-opus");
+  assert.equal(result.body.system, "");
+  assert.equal(result.decision.reason, "builtin:claude-code-agent-slug");
+});
+
+test("agent slug not present in agentModels falls through", async () => {
+  const plugin = createRouterPlugin({
+    profileModel: "Provider/claude-sonnet",
+    agentModels: { "code-reviewer": "Provider/claude-opus" }
+  });
+  const result = await plugin.routeRequest({
+    body: {
+      messages: [],
+      model: "claude-default",
+      system: "<CCR-AGENT>unknown-role</CCR-AGENT>"
+    },
+    headers: { "user-agent": "Claude Code" },
+    method: "POST",
+    url: "/v1/messages"
+  });
+
+  assert.equal(result.body.model, "Provider/claude-sonnet");
+  assert.equal(result.body.system, "");
+  assert.equal(result.decision.reason, "builtin:claude-code");
+});
+
+test("agent model tag beats the agent slug tag and both are stripped", async () => {
+  const plugin = createRouterPlugin({
+    profileModel: "Provider/claude-sonnet",
+    agentModels: { worker: "Provider/claude-haiku" }
+  });
+  const result = await plugin.routeRequest({
+    body: {
+      messages: [],
+      model: "claude-default",
+      system: "<CCR-AGENT>worker</CCR-AGENT> <CCR-AGENT-MODEL>Provider/claude-opus</CCR-AGENT-MODEL>"
+    },
+    headers: { "user-agent": "Claude Code" },
+    method: "POST",
+    url: "/v1/messages"
+  });
+
+  assert.equal(result.body.model, "Provider/claude-opus");
+  assert.equal(result.body.system, " ");
+  assert.equal(result.decision.reason, "builtin:claude-code-agent-model");
+});
+
+test("agent tags scan only the first two messages", async () => {
+  const plugin = createRouterPlugin({ profileModel: "Provider/claude-sonnet" });
+  const result = await plugin.routeRequest({
+    body: {
+      messages: [
+        { content: "first", role: "user" },
+        { content: "assistant response", role: "assistant" },
+        { content: "third <CCR-AGENT-MODEL>Provider/claude-opus</CCR-AGENT-MODEL>", role: "user" }
+      ],
+      model: "claude-default"
+    },
+    headers: { "user-agent": "Claude Code" },
+    method: "POST",
+    url: "/v1/messages"
+  });
+
+  assert.equal(result.body.model, "Provider/claude-sonnet");
+  assert.match(result.body.messages[2].content, /CCR-AGENT-MODEL/);
   assert.equal(result.decision.reason, "builtin:claude-code");
 });

@@ -1499,6 +1499,7 @@ export type AppConfig = {
   Providers: GatewayProviderConfig[];
   Router: RouterConfig;
   agent: GatewayAgentConfig;
+  agentModels?: Record<string, string>;
   autoStart: boolean;
   botConfigs: BotGatewaySavedConfig[];
   botGateway: BotGatewayRuntimeConfig;
