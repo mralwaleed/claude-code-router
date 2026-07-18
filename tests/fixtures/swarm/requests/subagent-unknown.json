@@ -1,0 +1,13 @@
+{
+  "model": "sonnet",
+  "system": [
+    { "type": "text", "text": "You are a Claude agent, built on Anthropic's Claude Agent SDK." },
+    { "type": "text", "text": "Research the following topic and reply concisely. This is an ad-hoc task prompt that does not correspond to any registered Swarm agent body, so attribution must classify it as unknown (and the leader detector must not match it either)." }
+  ],
+  "messages": [
+    { "role": "user", "content": "Look into it." }
+  ],
+  "metadata": {
+    "user_id": "acct_session_FIXTURE-UNKNOWN"
+  }
+}

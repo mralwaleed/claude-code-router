@@ -49,6 +49,7 @@ import type {
   RouterRuleRewrite,
   RouterRuleRewriteOperation,
   RouterRuleType,
+  SwarmRuntimeConfig,
   TrayBalanceProgressConfig,
   TrayComponentVariants,
   TrayIconPreference,
@@ -69,7 +70,7 @@ type LoadedBotGatewayConfig = Partial<Omit<BotGatewayRuntimeConfig, "handoff">> 
   handoff?: Partial<BotGatewayRuntimeConfig["handoff"]>;
 };
 
-type LoadedAppConfig = Partial<Omit<AppConfig, "Router" | "agent" | "botGateway" | "gateway" | "observability" | "profile" | "proxy" | "toolHub">> & {
+type LoadedAppConfig = Partial<Omit<AppConfig, "Router" | "agent" | "botGateway" | "gateway" | "observability" | "profile" | "proxy" | "toolHub" | "swarm">> & {
   Router?: Partial<RouterConfig>;
   agent?: Partial<GatewayAgentConfig>;
   botConfigs?: BotGatewaySavedConfig[];
@@ -79,6 +80,7 @@ type LoadedAppConfig = Partial<Omit<AppConfig, "Router" | "agent" | "botGateway"
   profile?: LoadedProfileConfig;
   proxy?: Partial<ProxyRuntimeConfig>;
   toolHub?: Partial<ToolHubConfig>;
+  swarm?: Partial<SwarmRuntimeConfig>;
 };
 
 export type RawAppConfigSource = "default" | "legacy-json" | "sqlite";
@@ -256,6 +258,9 @@ export async function loadAppConfig(): Promise<AppConfig> {
       observability: {
         ...DEFAULT_CONFIG.observability,
         ...(picked.observability ?? {})
+      },
+      swarm: {
+        enabled: picked.swarm?.enabled ?? DEFAULT_CONFIG.swarm?.enabled ?? false
       },
       preferredProvider:
         picked.preferredProvider || providers[0]?.name || DEFAULT_CONFIG.preferredProvider,
@@ -632,6 +637,10 @@ function pickConfig(value: Partial<AppConfig>): LoadedAppConfig {
   if (observability) {
     config.observability = observability;
   }
+  const swarm = parseSwarm((value as Record<string, unknown>).swarm);
+  if (swarm) {
+    config.swarm = swarm;
+  }
   const toolHub = parseToolHub((value as Record<string, unknown>).toolHub ?? (value as Record<string, unknown>).tool_hub);
   if (toolHub) {
     config.toolHub = toolHub;
@@ -697,7 +706,16 @@ function parseObservability(value: unknown): Partial<ObservabilityConfig> | unde
   return Object.keys(observability).length ? observability : undefined;
 }
 
-
+function parseSwarm(value: unknown): Partial<SwarmRuntimeConfig> | undefined {
+  if (!isObject(value)) {
+    return undefined;
+  }
+  const swarm: Partial<SwarmRuntimeConfig> = {};
+  if (typeof value.enabled === "boolean") {
+    swarm.enabled = value.enabled;
+  }
+  return Object.keys(swarm).length ? swarm : undefined;
+}
 
 function parseAgentModels(value: unknown): Record<string, string> | undefined {
   if (!isObject(value)) {
@@ -1110,6 +1128,10 @@ export function parseProvidersForTest(value: unknown): GatewayProviderConfig[] |
 
 export function parseAgentModelsForTest(value: unknown): Record<string, string> | undefined {
   return parseAgentModels(value);
+}
+
+export function parseSwarmForTest(value: unknown): Partial<SwarmRuntimeConfig> | undefined {
+  return parseSwarm(value);
 }
 
 function parseModelDescriptions(value: unknown, models: string[]): Record<string, string> | undefined {

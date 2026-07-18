@@ -1007,6 +1007,15 @@ export type ObservabilityConfig = {
   requestLogs: boolean;
 };
 
+/**
+ * Swarm Profiles runtime/feature flag. Opt-in and fail-open.
+ * `enabled` defaults to false; when false, no Swarm code path executes and behavior is
+ * identical to a build without Swarm support.
+ */
+export type SwarmRuntimeConfig = {
+  enabled: boolean;
+};
+
 export type TrayIconPreference = "random" | "violet" | "orange" | "cyan" | "progress";
 
 export type TrayBalanceProgressConfig = {
@@ -1508,6 +1517,7 @@ export type AppConfig = {
   observability: ObservabilityConfig;
   preferredProvider: string;
   plugins: GatewayPluginConfig[];
+  swarm?: SwarmRuntimeConfig;
   profile: ProfileRuntimeConfig;
   proxy: ProxyRuntimeConfig;
   providerPlugins?: unknown[];
