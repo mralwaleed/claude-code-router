@@ -161,12 +161,13 @@ export function detectFingerprintCollisions(
 
 /**
  * Apply collision results to a set of agents: mark colliding agents' validationStatus as
- * "collides" with a descriptive error. Returns a new array (does not mutate input).
+ * "collides" with a descriptive error. Returns a new array (does not mutate input). Generic so
+ * it preserves extension fields (e.g. ScannedAgent.canonicalBody).
  */
-export function applyCollisionStatus(
-  agents: readonly SwarmAgent[],
+export function applyCollisionStatus<T extends SwarmAgent>(
+  agents: readonly T[],
   collisions: readonly FingerprintCollision[]
-): SwarmAgent[] {
+): T[] {
   const collidingIds = new Set(collisions.flatMap((collision) => collision.agentIds));
   return agents.map((agent) => {
     if (!collidingIds.has(agent.id)) {
@@ -180,6 +181,6 @@ export function applyCollisionStatus(
         ...agent.validationErrors,
         `identical canonical body shared with: ${match?.agentIds.filter((id) => id !== agent.id).join(", ")}`
       ]
-    };
+    } as T;
   });
 }
