@@ -1646,6 +1646,10 @@ export async function fusionBuiltinToolArtifactsForTest(
   return fusionBuiltinToolArtifacts(profiles, coreEndpoint, coreAuthToken, browserWebSearchMcpIntegration, proxyPreloadFile, proxyEnv);
 }
 
+export function normalizedProviderCapabilitiesForTest(provider: GatewayProviderConfig): GatewayProviderCapability[] {
+  return normalizedProviderCapabilities(provider);
+}
+
 function fusionBuiltinMcpServer({
   entry,
   env,
@@ -6894,14 +6898,14 @@ function normalizedProviderCapabilities(provider: GatewayProviderConfig): Gatewa
       normalized.push(selected);
     }
   }
-  return applyPresetProtocolLock(provider, normalized);
+  return applyProviderProtocolLock(provider, normalized);
 }
 
-function applyPresetProtocolLock(
+function applyProviderProtocolLock(
   provider: GatewayProviderConfig,
   capabilities: GatewayProviderCapability[]
 ): GatewayProviderCapability[] {
-  const lockedProtocols = lockedProviderPresetProtocols(provider, capabilities);
+  const lockedProtocols = lockedProviderProtocols(provider, capabilities);
   if (lockedProtocols.length === 0) {
     return capabilities;
   }
@@ -6920,10 +6924,21 @@ function applyPresetProtocolLock(
     : [];
 }
 
-function lockedProviderPresetProtocols(
+/**
+ * The protocols a provider is locked to. A manual protocol override
+ * ({@link GatewayProviderConfig.protocolMode} === "manual") always wins and
+ * locks the provider to a single protocol; otherwise preset-based locks (e.g.
+ * the Gemini preset) still apply.
+ */
+function lockedProviderProtocols(
   provider: GatewayProviderConfig,
   capabilities: GatewayProviderCapability[]
 ): GatewayProviderProtocol[] {
+  const manualProtocol = manualProviderProtocol(provider);
+  if (manualProtocol) {
+    return [manualProtocol];
+  }
+
   const baseUrls = [
     readBaseUrl(provider),
     ...capabilities.map((capability) => capability.baseUrl)
@@ -6936,6 +6951,13 @@ function lockedProviderPresetProtocols(
   }
 
   return [];
+}
+
+function manualProviderProtocol(provider: GatewayProviderConfig): GatewayProviderProtocol | undefined {
+  if (provider.protocolMode !== "manual") {
+    return undefined;
+  }
+  return normalizeProviderProtocol(provider.type) ?? normalizeProviderProtocol(provider.provider);
 }
 
 function providerCapabilityPriority(capability: GatewayProviderCapability): number {

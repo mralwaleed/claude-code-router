@@ -1445,24 +1445,37 @@ function App() {
       setProviderProbeError(translateAppErrorMessage(copy, credentials));
       return false;
     }
-    const selectableProtocols = providerSelectableProtocolsFromProbe(probe);
-    const selectedProtocols = providerDraft.selectedProtocols.length > 0
-      ? providerDraft.selectedProtocols.filter((protocol) => !probe || selectableProtocols.includes(protocol))
-      : [];
-    if (selectableProtocols.length > 0 && selectedProtocols.length === 0) {
-      setProviderProbeError(t("Select at least one protocol."));
-      return false;
+    const manualProtocol = providerDraft.protocolMode === "manual" ? providerDraft.protocol : undefined;
+
+    if (!manualProtocol) {
+      const selectableProtocols = providerSelectableProtocolsFromProbe(probe);
+      const selectedProtocols = providerDraft.selectedProtocols.length > 0
+        ? providerDraft.selectedProtocols.filter((protocol) => !probe || selectableProtocols.includes(protocol))
+        : [];
+      if (selectableProtocols.length > 0 && selectedProtocols.length === 0) {
+        setProviderProbeError(t("Select at least one protocol."));
+        return false;
+      }
     }
 
-    const protocolsToSave = selectedProtocols.length > 0 ? selectedProtocols : [probe?.detectedProtocol ?? providerDraft.protocol];
-    const fallbackProtocol = protocolsToSave.includes(providerDraft.protocol)
-      ? providerDraft.protocol
-      : protocolsToSave[0] ?? probe?.detectedProtocol ?? providerDraft.protocol;
-    const fallbackBaseUrl = providerGlobalBaseUrlForProbe(providerDraft.baseUrl, probe, protocolsToSave);
+    // A manual protocol is saved verbatim without requiring probing to support it.
+    const protocolsToSave = manualProtocol
+      ? [manualProtocol]
+      : (providerDraft.selectedProtocols.length > 0
+        ? providerDraft.selectedProtocols.filter((protocol) => !probe || providerSelectableProtocolsFromProbe(probe).includes(protocol))
+        : []);
+    const effectiveProtocols = protocolsToSave.length > 0
+      ? protocolsToSave
+      : [probe?.detectedProtocol ?? providerDraft.protocol];
+    const fallbackProtocol = manualProtocol
+      ?? (effectiveProtocols.includes(providerDraft.protocol)
+        ? providerDraft.protocol
+        : effectiveProtocols[0] ?? probe?.detectedProtocol ?? providerDraft.protocol);
+    const fallbackBaseUrl = providerGlobalBaseUrlForProbe(providerDraft.baseUrl, probe, effectiveProtocols);
     const modelDescriptions = modelDescriptionsForModels(providerDraft.modelDescriptions, models);
     const modelDisplayNames = modelDisplayNamesForModels(providerDraft.modelDisplayNames, models);
     const modelMetadata = modelMetadataForModels(providerDraft.modelMetadata, models);
-    const capabilities = providerCapabilitiesForProtocols(providerDraft.baseUrl, protocolsToSave, probe, presetCapabilitiesFromDraft(providerDraft));
+    const capabilities = providerCapabilitiesForProtocols(providerDraft.baseUrl, effectiveProtocols, probe, presetCapabilitiesFromDraft(providerDraft));
     const primaryCapability =
       capabilities.find((capability) => capability.type === fallbackProtocol) ??
       capabilities[0];
@@ -1527,6 +1540,7 @@ function App() {
       modelMetadata,
       models,
       name: providerName,
+      ...(providerDraft.protocolMode === "manual" ? { protocolMode: "manual" } : {}),
       type: protocol
     };
     const importedProviderPlugins = materializeProviderPluginTemplates(providerDraft.providerPlugins, providerName, protocol, providerId);

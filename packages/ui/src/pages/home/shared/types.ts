@@ -189,6 +189,7 @@ import type {
   ProviderDeepLinkPayload,
   ProviderDeepLinkRequest,
   ProviderModelMetadata,
+  ProviderProtocolMode,
   ProfileConfig,
   ProfileOpenSurface,
   CodexProfileConfigFormat,
@@ -420,6 +421,10 @@ export type AddProviderDraft = {
   accountMode: ProviderAccountDraftMode;
   accountRefreshIntervalMs: string;
   apiKey: string;
+  cliproxyEndpoint: string;
+  cliproxyManagementKey: string;
+  cliproxyProviderId: string;
+  cliproxyRefresh: boolean;
   baseUrl: string;
   credentials: ProviderCredentialDraft[];
   icon: string;
@@ -432,6 +437,7 @@ export type AddProviderDraft = {
   presetId: string;
   providerPlugins: unknown[];
   protocol: GatewayProviderProtocol;
+  protocolMode: ProviderProtocolMode;
   selectedModels: string[];
   selectedProtocols: GatewayProviderProtocol[];
   usageBalanceLimitPath: string;
@@ -460,7 +466,7 @@ export type ProviderCredentialDraft = {
   weight: string;
 };
 
-export type ProviderAccountDraftMode = "standard" | "http-json" | "raw";
+export type ProviderAccountDraftMode = "standard" | "http-json" | "raw" | "cliproxy";
 export type ProviderUsageFieldTarget =
   | "balance"
   | "balanceLimit"

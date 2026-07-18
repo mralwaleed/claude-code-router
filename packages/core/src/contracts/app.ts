@@ -137,9 +137,22 @@ export type GatewayProviderConfig = {
   models: string[];
   name: string;
   provider?: string;
+  protocolMode?: ProviderProtocolMode;
   transformer?: unknown;
   type?: GatewayProviderProtocol | string;
 };
+
+/**
+ * How the gateway resolves the protocol for a custom provider.
+ *
+ * - "auto" (default): the provider is probed and the detected protocol is used.
+ * - "manual": the protocol in {@link GatewayProviderConfig.type} is locked and
+ *   used verbatim at runtime. Probing is skipped for protocol selection (it can
+ *   still run for model discovery / connectivity), the manual protocol is not
+ *   required to pass probing before saving, and it survives API key, endpoint,
+ *   or model refreshes.
+ */
+export type ProviderProtocolMode = "auto" | "manual";
 
 export type ProviderReasoningLevel = {
   description: string;
@@ -170,7 +183,14 @@ export type ProviderCredentialConfig = {
 };
 
 export type ProviderAccountAuthMode = "provider-api-key" | "provider-api-key-raw" | "none";
-export type ProviderAccountConnectorSource = "standard" | "http-json" | "plugin" | "local-estimate" | "merged" | "unsupported";
+export type ProviderAccountConnectorSource =
+  | "standard"
+  | "http-json"
+  | "plugin"
+  | "local-estimate"
+  | "merged"
+  | "unsupported"
+  | "cliproxy";
 export type ProviderAccountStatus = "ok" | "warning" | "critical" | "error" | "unsupported";
 export type ProviderAccountMeterKind = "balance" | "subscription" | "quota" | "time_window" | "tokens" | "requests";
 export type ProviderAccountMeterUnit = "USD" | "CNY" | "hours" | "minutes" | "tokens" | "requests" | string;
@@ -187,7 +207,8 @@ export type ProviderAccountConnectorConfig =
   | ProviderAccountStandardConnectorConfig
   | ProviderAccountHttpJsonConnectorConfig
   | ProviderAccountPluginConnectorConfig
-  | ProviderAccountLocalEstimateConnectorConfig;
+  | ProviderAccountLocalEstimateConnectorConfig
+  | ProviderAccountCliProxyConnectorConfig;
 
 export type ProviderAccountConnectorBaseConfig = {
   id?: string;
@@ -231,6 +252,56 @@ export type ProviderAccountLocalWindowConfig = {
   limit: number;
   unit: "hours" | "tokens" | "requests";
   window: ProviderAccountMeterWindow;
+};
+
+/**
+ * A native connector that fetches already-normalized usage from a CLIProxyAPI
+ * provider-scoped usage endpoint
+ * (`GET /v0/management/providers/{providerId}/usage`). This replaces the external
+ * Python usage bridge (port 8321) with a first-class, multi-account integration.
+ *
+ * `providerId` is the stable CLIProxyAPI provider identifier
+ * (e.g. `codex:account_a1b2c3d4e5f6`) — the "usageProviderId" that selects which
+ * upstream account's usage is returned. It is resolved by CLIProxyAPI from the
+ * matching OAuth credential, never guessed.
+ *
+ * The provider's configured `api_key` is reused as the CLIProxyAPI management
+ * key (sent as `Authorization: Bearer`), so no second secret is stored unless
+ * overridden via `managementKey`.
+ */
+export type ProviderAccountCliProxyConnectorConfig = ProviderAccountConnectorBaseConfig & {
+  auth?: ProviderAccountAuthMode;
+  endpoint?: string;
+  headers?: Record<string, string>;
+  managementKey?: string;
+  providerId: string;
+  refresh?: boolean;
+  type: "cliproxy";
+};
+
+/**
+ * A provider/account listed by CLIProxyAPI's `GET /v0/management/providers`.
+ * Used by the CCR account picker to let the user choose which upstream account
+ * to bind (its `id` becomes a cliproxy connector's `providerId`).
+ */
+export type CliProxyProviderSummary = {
+  displayName?: string;
+  id: string;
+  status?: string;
+  type?: string;
+  usageSupported?: boolean;
+};
+
+export type CliProxyProviderListRequest = {
+  apiKey?: string;
+  baseUrl?: string;
+  endpoint?: string;
+  providerName?: string;
+};
+
+export type CliProxyProviderListResult = {
+  endpoint: string;
+  providers: CliProxyProviderSummary[];
 };
 
 export type ProviderAccountMappingConfig = {

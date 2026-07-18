@@ -27,7 +27,7 @@ import { getAgentAnalysis, getAgentTracePayload, getRequestLogDetail, getRequest
 import { getUsageStats } from "@ccr/core/usage/store";
 import { gatewayService } from "@ccr/core/gateway/service";
 import { shouldRestartGatewayForRuntimeConfigChange } from "@ccr/core/gateway/runtime-change";
-import { getProviderAccountSnapshots, invalidateProviderAccountSnapshotCache, resetCodexRateLimitCredit, testProviderAccountConnector } from "@ccr/core/providers/account-service";
+import { getProviderAccountSnapshots, invalidateProviderAccountSnapshotCache, listCliProxyProviders, resetCodexRateLimitCredit, testProviderAccountConnector } from "@ccr/core/providers/account-service";
 import type {
   AgentAnalysisFilter,
   AgentAnalysisTracePayloadRequest,
@@ -54,6 +54,7 @@ import type {
   ProfileApplyResult,
   ProfileOpenRequest,
   ProviderAccountResetRequest,
+  CliProxyProviderListRequest,
   ProviderAccountSnapshotRequestOptions,
   ProviderAccountTestRequest,
   ProviderCatalogModelsRequest,
@@ -302,6 +303,7 @@ const rpcHandlers: Record<string, RpcHandler> = {
   getUsageStats: (range, filter) => getUsageStats(range as UsageStatsRange | undefined, filter as UsageStatsFilter | undefined),
   importLocalAgentProvider: (request) => importLocalAgentProvider(request as LocalAgentProviderImportRequest),
   installProxyCertificate: () => proxyService.installCertificate(),
+  listCliProxyProviders: (request) => listCliProxyProviders(request as CliProxyProviderListRequest),
   listMcpServerTools: async (serverName) => {
     const name = typeof serverName === "string" ? serverName.trim() : "";
     if (!name) {

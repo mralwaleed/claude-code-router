@@ -180,6 +180,7 @@ import type {
   PluginDirectorySelection,
   PluginMarketplaceEntry,
   ProviderAccountConfig,
+  ProviderAccountCliProxyConnectorConfig,
   ProviderAccountConnectorConfig,
   ProviderAccountHttpJsonConnectorConfig,
   ProviderAccountMeter,
@@ -882,6 +883,7 @@ export function createProviderDraftFromDeepLinkPayload(
     presetId: preset?.id ?? customProviderPresetId,
     providerPlugins: [],
     protocol,
+    protocolMode: "auto",
     selectedModels: [],
     selectedProtocols: uniqueProviderProtocols(preset?.endpoints.flatMap((item) => item.protocols) ?? [protocol])
   };
@@ -968,6 +970,7 @@ export function createProviderDraft(providers: GatewayProviderConfig[]): AddProv
     presetId: "",
     providerPlugins: [],
     protocol: "openai_chat_completions",
+    protocolMode: "auto",
     selectedModels: [],
     selectedProtocols: []
   };
@@ -996,6 +999,7 @@ export function createProviderDraftFromProvider(provider: GatewayProviderConfig)
     presetId: preset?.id ?? customProviderPresetId,
     providerPlugins: [],
     protocol,
+    protocolMode: provider.protocolMode ?? "auto",
     selectedModels: [],
     selectedProtocols: selectedProviderProtocolsFromCapabilities(provider.capabilities, protocol)
   };
@@ -1183,6 +1187,18 @@ export function parseProviderAccountDraft(draft: AddProviderDraft): GatewayProvi
     };
   }
 
+  if (draft.accountMode === "cliproxy") {
+    const connector = providerCliproxyConnectorFromDraft(draft);
+    if (typeof connector === "string") {
+      return connector;
+    }
+    return {
+      connectors: [connector],
+      enabled: true,
+      refreshIntervalMs: refreshIntervalMs && refreshIntervalMs > 0 ? refreshIntervalMs : undefined
+    };
+  }
+
   if (draft.accountMode === "http-json" || draft.usageRequestUrl.trim()) {
     const connector = providerHttpJsonConnectorFromDraft(draft);
     if (typeof connector === "string") {
@@ -1222,6 +1238,10 @@ export function createDefaultProviderAccountDraft(): Pick<
   | "accountEnabled"
   | "accountMode"
   | "accountRefreshIntervalMs"
+  | "cliproxyEndpoint"
+  | "cliproxyManagementKey"
+  | "cliproxyProviderId"
+  | "cliproxyRefresh"
   | "usageBalanceLimitPath"
   | "usageBalanceRemainingPath"
   | "usageBalanceUnit"
@@ -1242,6 +1262,10 @@ export function createDefaultProviderAccountDraft(): Pick<
     accountEnabled: defaultProviderAccountConfig.enabled !== false,
     accountMode: "standard",
     accountRefreshIntervalMs: "",
+    cliproxyEndpoint: "",
+    cliproxyManagementKey: "",
+    cliproxyProviderId: "",
+    cliproxyRefresh: false,
     usageBalanceLimitPath: "",
     usageBalanceRemainingPath: "",
     usageBalanceUnit: "USD",
@@ -1266,6 +1290,22 @@ export function createProviderAccountDraftFromConfig(account: ProviderAccountCon
   }
 
   const connectors = account.connectors ?? [];
+  const cliproxyConnector = connectors.length === 1 && connectors[0]?.type === "cliproxy"
+    ? (connectors[0] as ProviderAccountCliProxyConnectorConfig)
+    : undefined;
+  if (cliproxyConnector) {
+    return {
+      ...base,
+      accountConnectorsText: JSON.stringify(connectors, null, 2),
+      accountEnabled: account.enabled === true,
+      accountMode: "cliproxy",
+      accountRefreshIntervalMs: account.refreshIntervalMs ? String(account.refreshIntervalMs) : "",
+      cliproxyEndpoint: cliproxyConnector.endpoint ?? "",
+      cliproxyManagementKey: cliproxyConnector.managementKey ?? "",
+      cliproxyProviderId: cliproxyConnector.providerId ?? "",
+      cliproxyRefresh: cliproxyConnector.refresh === true
+    };
+  }
   const httpJsonConnector = connectors.length === 1 && connectors[0]?.type === "http-json"
     ? connectors[0] as ProviderAccountHttpJsonConnectorConfig
     : undefined;
@@ -1313,6 +1353,22 @@ export function createProviderAccountDraftFromConfig(account: ProviderAccountCon
     usageSubscriptionRemainingPath: stringValue(subscriptionMeter?.remaining) || "",
     usageSubscriptionResetPath: stringValue(subscriptionMeter?.resetAt) || "",
     usageSubscriptionUnit: stringValue(subscriptionMeter?.unit) || "tokens"
+  };
+}
+
+export function providerCliproxyConnectorFromDraft(draft: AddProviderDraft): ProviderAccountCliProxyConnectorConfig | string {
+  const providerId = draft.cliproxyProviderId.trim();
+  if (!providerId) {
+    return "CLIProxyAPI provider id is required. Pick a provider from the list.";
+  }
+  const endpoint = draft.cliproxyEndpoint.trim();
+  return {
+    auth: "provider-api-key",
+    providerId,
+    type: "cliproxy",
+    ...(endpoint ? { endpoint } : {}),
+    ...(draft.cliproxyManagementKey.trim() ? { managementKey: draft.cliproxyManagementKey.trim() } : {}),
+    ...(draft.cliproxyRefresh ? { refresh: true } : {})
   };
 }
 
@@ -1961,6 +2017,55 @@ export function providerCapabilitiesForProtocols(
 }
 
 export function applyProviderProbeResult(draft: AddProviderDraft, probe: GatewayProviderProbeResult): AddProviderDraft {
+  // A manually-locked protocol is never replaced by probing. Model discovery,
+  // account details, and the typed base URL still flow through so connectivity
+  // testing and model refresh keep working through the selected protocol.
+  if (draft.protocolMode === "manual") {
+    const protocol = draft.protocol;
+    const selectedProtocols = uniqueProviderProtocols([protocol]);
+    const modelDisplayNames = mergeModelDisplayNames(draft.modelDisplayNames, probe.modelDisplayNames);
+    const modelMetadata = mergeModelMetadata(draft.modelMetadata, probe.modelMetadata);
+    const accountDraft = providerProbeAccountDraftPatch(draft, probe.account);
+    const baseUrl = providerGlobalBaseUrlForProbe(draft.baseUrl, probe, selectedProtocols);
+
+    if (probe.models.length === 0) {
+      return {
+        ...draft,
+        ...accountDraft,
+        baseUrl,
+        modelDisplayNames,
+        modelMetadata,
+        protocol,
+        selectedModels: mergeProviderModelLists(draft.selectedModels),
+        selectedProtocols
+      };
+    }
+
+    const detectedModels = new Set(probe.models);
+    const typedModels = splitLines(draft.modelsText);
+    const selectedCatalogModels = draft.selectedModels.filter((model) => detectedModels.has(model));
+    const selectedCustomModels = draft.selectedModels.filter((model) => !detectedModels.has(model));
+    const typedCatalogModels = typedModels.filter((model) => detectedModels.has(model));
+    const typedCustomModels = typedModels.filter((model) => !detectedModels.has(model));
+    const selectedModels = mergeProviderModelLists(selectedCatalogModels, typedCatalogModels);
+    const customModels = mergeProviderModelLists(selectedCustomModels, typedCustomModels);
+    const nextSelectedModels = selectedModels.length > 0 || customModels.length > 0
+      ? selectedModels
+      : mergeProviderModelLists(draft.selectedModels);
+
+    return {
+      ...draft,
+      ...accountDraft,
+      baseUrl,
+      modelDisplayNames,
+      modelMetadata,
+      protocol,
+      modelsText: customModels.join("\n"),
+      selectedModels: nextSelectedModels,
+      selectedProtocols
+    };
+  }
+
   const detectedProtocol = probe.detectedProtocol ?? draft.protocol;
   const selectedProtocols = selectedProviderProtocolsForProbe(draft.selectedProtocols, probe, detectedProtocol, draft.presetId);
   const protocol = selectedProtocols.includes(draft.protocol)

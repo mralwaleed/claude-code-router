@@ -66,6 +66,7 @@ export const IPC_CHANNELS = {
   appSetProxyNetworkCaptureEnabled: "ccr:app:set-proxy-network-capture-enabled",
   appSelectPluginDirectory: "ccr:app:select-plugin-directory",
   appShowMainWindow: "ccr:app:show-main-window",
+  appListCliProxyProviders: "ccr:app:list-cliproxy-providers",
   appTestProviderAccountConnector: "ccr:app:test-provider-account-connector",
   appUpdateCheck: "ccr:app:update-check",
   appUpdateDownload: "ccr:app:update-download",
