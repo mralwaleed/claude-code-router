@@ -328,7 +328,7 @@ const privateFileMode = 0o600;
 const persistedApiKeyCacheTtlMs = 1000;
 let persistedApiKeyCache: { loadedAt: number; values: ApiKeyConfig[] } | undefined;
 
-class GatewayService {
+export class GatewayService {
   private browserAutomationMcpIntegration?: BrowserAutomationMcpIntegration;
   private browserWebSearchMcpIntegration?: BrowserWebSearchMcpIntegration;
   private child?: ChildProcess;
@@ -391,7 +391,8 @@ class GatewayService {
           swarmId: session.swarmId,
           agentDirectories: profile.agentDirectories,
           providers,
-          watch: true
+          watch: true,
+          agentOverrides: profile.agentOverrides
         });
         await registry.initialScan();
         this.swarmRegistries.set(session.swarmId, registry);
@@ -726,8 +727,12 @@ class GatewayService {
     }
 
     const swarmAuth = this.getSwarmAuth();
+    // Prefer an explicit Swarm token carried in `x-api-key` (resolveSwarmTokenForRequest). Claude
+    // Code sends an OAuth bearer in `authorization` when subscription-logged-in while the Swarm
+    // token travels in `x-api-key`; reading `authorization` first would mask the Swarm token.
     const swarmToken =
-      swarmAuth && (readAuthToken(request.headers) || readRemoteControlQueryAuthToken(request));
+      swarmAuth &&
+      (resolveSwarmTokenForRequest(request.headers) || readRemoteControlQueryAuthToken(request));
     let apiKey: ApiKeyConfig | undefined;
     let swarmSession: SwarmSession | undefined;
 
@@ -8760,6 +8765,20 @@ function readAuthToken(headers: IncomingHttpHeaders): string | undefined {
     return undefined;
   }
   return raw.toLowerCase().startsWith("bearer ") ? raw.slice(7).trim() : raw;
+}
+
+/**
+ * Resolve the Swarm credential from a request's headers. Prefers an explicit Swarm token carried
+ * in `x-api-key` over the `authorization` bearer: when a user is OAuth-logged-in, Claude Code sends
+ * the OAuth bearer in `authorization` and the Swarm token in `x-api-key`, so reading `authorization`
+ * first would mask the Swarm token and authentication would fail.
+ */
+export function resolveSwarmTokenForRequest(headers: IncomingHttpHeaders): string | undefined {
+  const headerApiKey = readHeader(headers["x-api-key"]);
+  if (headerApiKey && isSwarmToken(headerApiKey)) {
+    return headerApiKey;
+  }
+  return readAuthToken(headers);
 }
 
 function readRemoteControlQueryAuthToken(request: IncomingMessage): string | undefined {
