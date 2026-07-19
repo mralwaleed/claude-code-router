@@ -29,14 +29,14 @@ test("raw token is absent from runtime.env (never in env exports or process args
   assert.ok(!rt.env.ANTHROPIC_AUTH_TOKEN);
 });
 
-test("raw token is absent from settings.json (only the helper PATH is referenced)", async () => {
+test("raw token is absent from settings.json (no apiKeyHelper; the proxy injects auth)", async () => {
   const { rawToken, rt } = await seedRuntime();
   const settings = readFileSync(rt.settingsFile, "utf8");
   assert.ok(!settings.includes(rawToken), "settings.json must not embed the token");
-  assert.ok(settings.includes(rt.helperFile), "settings.json must reference the helper file path");
+  assert.ok(!settings.includes("apiKeyHelper"), "settings.json must not reference apiKeyHelper (the proxy injects auth)");
 });
 
-test("raw token is present ONLY in the helper script (0700), nowhere else in the runtime dir", async () => {
+test("raw token is present ONLY in the 0600 token file; proxy script embeds no token", async () => {
   const { rawToken, rt } = await seedRuntime();
   const files = readdirSync(rt.tempConfigDir);
   let tokenFileCount = 0;
@@ -46,10 +46,12 @@ test("raw token is present ONLY in the helper script (0700), nowhere else in the
     if (content.includes(rawToken)) {
       tokenFileCount += 1;
       const mode = statSync(fullPath).mode & 0o777;
-      assert.equal(mode, 0o700, `file containing token (${file}) must be 0700`);
+      assert.equal(mode, 0o600, `file containing token (${file}) must be 0600`);
     }
   }
-  assert.equal(tokenFileCount, 1, "exactly one file (the helper) should contain the token");
+  assert.equal(tokenFileCount, 1, "exactly one file (swarm-token) should contain the token");
+  const proxyScript = readFileSync(rt.proxyScript, "utf8");
+  assert.ok(!proxyScript.includes(rawToken), "the proxy script must not embed the raw token");
 });
 
 test("sanitized session DTO never carries authTokenHash", async () => {

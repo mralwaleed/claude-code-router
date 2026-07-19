@@ -43,26 +43,31 @@ test("buildSwarmLaunchRuntime writes an isolated ephemeral config (no global set
 
   const rt = buildSwarmLaunchRuntime({ session, rawToken, gatewayEndpoint: gateway, configDir });
 
-  // env points at the gateway; no model asserted (CCR decides routing)
+  // env points at the gateway; no model asserted (CCR decides routing); no token in env
   assert.equal(rt.env.ANTHROPIC_BASE_URL, gateway);
   assert.equal(rt.env.CLAUDE_CONFIG_DIR, rt.tempConfigDir);
   assert.equal("ANTHROPIC_MODEL" in rt.env, false);
+  assert.equal("ANTHROPIC_API_KEY" in rt.env, false);
+  for (const value of Object.values(rt.env)) {
+    assert.ok(!value.includes(rawToken), "env must not carry the raw token");
+  }
 
   // temp dir is strictly under the provided configDir (isolated; global ~/.claude untouched)
   assert.ok(rt.tempConfigDir.startsWith(path.join(configDir, "swarm-runtime")));
-  assert.ok(existsSync(rt.helperFile));
+  assert.ok(existsSync(rt.tokenFile));
+  assert.ok(existsSync(rt.proxyScript));
   assert.ok(existsSync(rt.settingsFile));
 
-  // helper script echoes the raw token; settings.json points at it (no token inline in settings)
-  const helper = readFileSync(rt.helperFile, "utf8");
-  assert.ok(helper.includes(rawToken), "helper must carry the raw token for the child process");
-  const settings = JSON.parse(readFileSync(rt.settingsFile, "utf8"));
-  assert.equal(settings.apiKeyHelper, rt.helperFile);
-  assert.equal(JSON.stringify(settings).includes(rawToken), false, "settings.json must not embed the token");
+  // the 0600 token file holds the raw token; the proxy script embeds none and reads it at runtime
+  assert.equal(readFileSync(rt.tokenFile, "utf8"), rawToken);
+  assert.equal(statSync(rt.tokenFile).mode & 0o777, 0o600);
+  const proxySrc = readFileSync(rt.proxyScript, "utf8");
+  assert.ok(!proxySrc.includes(rawToken), "proxy script must not embed the raw token");
 
-  // helper is executable (0o700)
-  const mode = statSync(rt.helperFile).mode & 0o777;
-  assert.equal(mode, 0o700);
+  // settings.json is minimal — no apiKeyHelper (the proxy injects auth), no token
+  const settings = JSON.parse(readFileSync(rt.settingsFile, "utf8"));
+  assert.equal(settings.apiKeyHelper, undefined);
+  assert.equal(JSON.stringify(settings).includes(rawToken), false, "settings.json must not embed the token");
 });
 
 test("stopSwarmSession revokes the session and deletes the ephemeral runtime dir", async () => {

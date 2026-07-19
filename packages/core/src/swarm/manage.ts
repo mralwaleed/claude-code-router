@@ -16,7 +16,7 @@ import { SWARM_SCHEMA_VERSION } from "@ccr/core/swarm/contracts";
 import { SwarmStore } from "@ccr/core/swarm/store";
 import { SwarmAgentRegistry } from "@ccr/core/swarm/registry";
 import { providerViewsFromConfig, validateSwarmProfile } from "@ccr/core/swarm/validation";
-import { createSwarmSession, buildSwarmLaunchRuntime, stopSwarmSession } from "@ccr/core/swarm/launch";
+import { createSwarmSession, buildSwarmLaunchRuntime, spawnSwarmTokenProxy, stopSwarmSession } from "@ccr/core/swarm/launch";
 import { TerminalLaunchAdapter, FakeLaunchAdapter, type SwarmLaunchAdapter } from "@ccr/core/swarm/launch-adapter";
 import {
   toAgentDto,
@@ -197,6 +197,31 @@ export class SwarmManagement {
     });
     this.launchedRuntimeDirs.set(created.session.id, runtime.tempConfigDir);
 
+    // Spawn the loopback token proxy and route Claude Code at it. The proxy injects the Swarm
+    // token (read from a 0600 file) as x-api-key on every request, so the raw token never enters
+    // Claude Code's env/argv — this is what makes OAuth-logged-in sessions authenticate reliably.
+    // Only real (Terminal) launches need it; FakeLaunchAdapter is a hermetic test launch with no
+    // real Claude Code process, so the proxy (and its detached child) is skipped there.
+    if (this.launchAdapter instanceof TerminalLaunchAdapter) {
+      try {
+        const upstream = parseUpstream(this.gatewayEndpoint);
+        const proxy = await spawnSwarmTokenProxy({
+          proxyScript: runtime.proxyScript,
+          tokenFile: runtime.tokenFile,
+          upstreamHost: upstream.host,
+          upstreamPort: upstream.port,
+          pidFile: runtime.pidFile
+        });
+        const proxyUrl = `http://127.0.0.1:${proxy.port}`;
+        runtime.env.ANTHROPIC_BASE_URL = proxyUrl;
+        runtime.env.ANTHROPIC_API_BASE_URL = proxyUrl;
+        runtime.env.CLAUDE_AGENT_API_BASE_URL = proxyUrl;
+      } catch (error) {
+        await this.cleanupSession(created.session.id);
+        return { ok: false, error: `Failed to start Swarm token proxy: ${error instanceof Error ? error.message : String(error)}` };
+      }
+    }
+
     // write a launcher script that carries the env into an interactive shell
     const launchScript = path.join(runtime.tempConfigDir, "launch-claude.sh");
     const envExports = Object.entries(runtime.env).map(([k, v]) => `export ${k}=${shellQuote(v)}`).join("\n");
@@ -324,4 +349,14 @@ function randomId(): string {
 
 function shellQuote(value: string): string {
   return `'${String(value).replace(/'/g, "'\\''")}'`;
+}
+
+/** Parse a gateway endpoint URL into the loopback host/port the token proxy forwards to. */
+function parseUpstream(endpoint: string): { host: string; port: number } {
+  try {
+    const url = new URL(endpoint);
+    return { host: url.hostname || "127.0.0.1", port: url.port ? Number(url.port) : 80 };
+  } catch {
+    return { host: "127.0.0.1", port: 80 };
+  }
 }

@@ -1,9 +1,9 @@
 /**
  * Swarm launch token format (Phase 3).
  *
- * Tokens are SESSION CREDENTIALS, not user secrets. They are minted by the launcher, handed to
- * the launched Claude Code process via its apiKeyHelper, hashed at rest, and never persisted,
- * logged, exported, or shown in diagnostics in raw form.
+ * Tokens are SESSION CREDENTIALS, not user secrets. They are minted by the launcher, placed in a
+ * 0600 runtime file read by the loopback token proxy (which injects x-api-key toward the gateway),
+ * hashed at rest, and never persisted, logged, exported, or shown in diagnostics in raw form.
  *
  * Format:  ccr-swarm-v1-<base64url(randomBytes)>
  *   - prefix "ccr-swarm-v1-": explicit token type + version (so the gateway can route it into
