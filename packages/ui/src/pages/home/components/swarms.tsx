@@ -155,7 +155,7 @@ export function SwarmsView() {
     return (
       <div className="flex h-full flex-col gap-4 overflow-y-auto p-6">
         <div className="flex items-center gap-3">
-          <Button onClick={backToList} size="sm" variant="ghost">← Back</Button>
+          <Button data-testid="swarm-back" onClick={backToList} size="sm" variant="ghost">← Back</Button>
           <h2 className="text-lg font-semibold">{profile.name}</h2>
           <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${profile.enabled ? "bg-emerald-500/10 text-emerald-600" : "bg-muted text-muted-foreground"}`}>{profile.enabled ? "Enabled" : "Disabled"}</span>
         </div>
@@ -164,7 +164,7 @@ export function SwarmsView() {
         <section>
           <div className="mb-2 flex items-center gap-2">
             <h3 className="text-sm font-semibold">Agent Registry ({agents.length})</h3>
-            <Button onClick={() => rescanSwarm(profile.id)} disabled={busy} size="sm" variant="secondary">Rescan</Button>
+            <Button data-testid="swarm-rescan" onClick={() => rescanSwarm(profile.id)} disabled={busy} size="sm" variant="secondary">Rescan</Button>
           </div>
           {agents.length === 0 ? (
             <p className="text-xs text-muted-foreground">No agents discovered. Check agent directories + rescan.</p>
@@ -208,13 +208,13 @@ export function SwarmsView() {
                                 {(providers.find((p) => (p.id ?? p.name) === editAgentProv)?.models ?? []).map((m) => <option key={m} value={m}>{m}</option>)}
                               </select>
                               <Button size="sm" variant="secondary" disabled={busy || !editAgentProv || !editAgentModel} onClick={() => saveAgentOverride(a.slug)}>Save</Button>
-                              <Button size="sm" variant="ghost" disabled={busy} onClick={() => { setEditAgentSlug(null); setEditAgentProv(""); setEditAgentModel(""); }}>Cancel</Button>
+                              <Button data-testid="swarm-override-cancel" size="sm" variant="ghost" disabled={busy} onClick={() => { setEditAgentSlug(null); setEditAgentProv(""); setEditAgentModel(""); }}>Cancel</Button>
                             </>
                           ) : (
                             <>
-                              <Button size="sm" variant="ghost" disabled={busy} onClick={() => { setEditAgentSlug(a.slug); setEditAgentProv(a.providerOverrideId); setEditAgentModel(a.modelOverride); }}>Override</Button>
-                              {a.assignmentSource === "override" && <Button size="sm" variant="ghost" disabled={busy} onClick={() => clearAgentOverride(a.slug)}>Clear</Button>}
-                              <Button size="sm" variant="ghost" disabled={busy} onClick={() => toggleAgent(a.slug, !a.enabled)}>{a.enabled ? "Disable" : "Enable"}</Button>
+                              <Button data-testid="swarm-agent-override" size="sm" variant="ghost" disabled={busy} onClick={() => { setEditAgentSlug(a.slug); setEditAgentProv(a.providerOverrideId); setEditAgentModel(a.modelOverride); }}>Override</Button>
+                              {a.assignmentSource === "override" && <Button data-testid="swarm-agent-clear" size="sm" variant="ghost" disabled={busy} onClick={() => clearAgentOverride(a.slug)}>Clear</Button>}
+                              <Button data-testid="swarm-agent-toggle" size="sm" variant="ghost" disabled={busy} onClick={() => toggleAgent(a.slug, !a.enabled)}>{a.enabled ? "Disable" : "Enable"}</Button>
                             </>
                           )}
                         </div>
@@ -240,7 +240,7 @@ export function SwarmsView() {
                   <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-emerald-600">{s.status}</span>
                   <span className="text-muted-foreground">{s.launcherType}</span>
                   <span className="text-muted-foreground">{s.claudeSessionId ? "bound" : "unbound"}</span>
-                  <Button onClick={() => stopSession(s.id)} disabled={busy} size="sm" variant="destructive">Stop</Button>
+                  <Button data-testid="swarm-stop" onClick={() => stopSession(s.id)} disabled={busy} size="sm" variant="destructive">Stop</Button>
                 </div>
               ))}
             </div>
@@ -291,14 +291,14 @@ export function SwarmsView() {
     <div className="flex h-full flex-col gap-4 overflow-y-auto p-6">
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold">Swarms</h2>
-        <Button onClick={() => setMode("create")} size="sm">+ Create</Button>
+        <Button data-testid="swarm-create-btn" onClick={() => setMode("create")} size="sm">+ Create</Button>
       </div>
       {swarms.length === 0 ? (
         <div className="flex flex-1 items-center justify-center">
           <div className="text-center">
-            <p className="text-sm text-muted-foreground">No Swarms configured.</p>
+            <p data-testid="swarm-empty-state" className="text-sm text-muted-foreground">No Swarms configured.</p>
             <p className="mt-1 text-xs text-muted-foreground">Create a Swarm to manage per-project agent orchestration.</p>
-            <Button onClick={() => setMode("create")} className="mt-4" size="sm">Create Swarm</Button>
+            <Button data-testid="swarm-empty-create" onClick={() => setMode("create")} className="mt-4" size="sm">Create Swarm</Button>
           </div>
         </div>
       ) : (
@@ -318,10 +318,10 @@ export function SwarmsView() {
                   </div>
                 </div>
                 <div className="flex gap-1">
-                  <Button onClick={() => openSwarm(s.id)} size="sm" variant="ghost">Open</Button>
+                  <Button data-testid="swarm-open" onClick={() => openSwarm(s.id)} size="sm" variant="ghost">Open</Button>
                   <Button onClick={() => launchSwarm(s.id)} disabled={busy || !s.enabled} size="sm" variant="secondary">Launch</Button>
                   <Button onClick={() => toggleEnabled(s.id, !s.enabled)} disabled={busy} size="sm" variant="ghost">{s.enabled ? "Disable" : "Enable"}</Button>
-                  <Button onClick={() => deleteSwarm(s.id)} disabled={busy} size="sm" variant="ghost">Delete</Button>
+                  <Button data-testid="swarm-delete" onClick={() => deleteSwarm(s.id)} disabled={busy} size="sm" variant="ghost">Delete</Button>
                 </div>
               </div>
             </div>
@@ -422,7 +422,7 @@ function SwarmForm({ providers, onSave, onCancel, busy }: { providers: GatewayPr
   return (
     <div className="flex h-full flex-col gap-4 overflow-y-auto p-6">
       <div className="flex items-center gap-3">
-        <Button onClick={onCancel} size="sm" variant="ghost">← Cancel</Button>
+        <Button data-testid="swarm-form-cancel" onClick={onCancel} size="sm" variant="ghost">← Cancel</Button>
         <h2 className="text-lg font-semibold">Create Swarm</h2>
       </div>
 
@@ -454,7 +454,7 @@ function SwarmForm({ providers, onSave, onCancel, busy }: { providers: GatewayPr
         <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={draft.autoDetectWorkspace} onChange={(e) => update("autoDetectWorkspace", e.target.checked)} /> Auto-detect workspace</label>
 
         <div className="flex gap-2">
-          <Button onClick={save} disabled={busy} size="sm">Save</Button>
+          <Button data-testid="swarm-form-save" onClick={save} disabled={busy} size="sm">Save</Button>
           <Button onClick={onCancel} disabled={busy} size="sm" variant="ghost">Cancel</Button>
         </div>
       </div>
@@ -466,7 +466,7 @@ function FormField({ label, value, onChange }: { label: string; value: string; o
   return (
     <label className="flex flex-col gap-1 text-sm">
       <span className="font-medium text-muted-foreground">{label}</span>
-      <input className="rounded-md border border-border bg-background px-3 py-1.5 text-sm" value={value} onChange={(e) => onChange(e.target.value)} />
+      <input data-testid={label.toLowerCase().replace(/[^a-z0-9]+/g,"-")} className="rounded-md border border-border bg-background px-3 py-1.5 text-sm" value={value} onChange={(e) => onChange(e.target.value)} />
     </label>
   );
 }
