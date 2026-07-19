@@ -48,7 +48,17 @@ export function resolveAssignment(
 
   let matched: SwarmProviderView | undefined;
   if (wantedId) {
+    // Match by exact provider ID
     matched = providers.find((p) => p.id.toLowerCase() === wantedId);
+    // Fallback: match providerId against the display name (display names are valid import candidates)
+    if (!matched) {
+      matched = providers.find((p) => p.name.toLowerCase() === wantedId);
+    }
+    // Fallback: match by normalized ID (display name → ID slug: "Claude Proxy" → "claude-proxy")
+    if (!matched) {
+      const normalized = wantedId.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+      matched = providers.find((p) => p.id.toLowerCase() === normalized);
+    }
   }
   if (!matched && wantedName) {
     matched = providers.find((p) => p.name.toLowerCase() === wantedName || p.id.toLowerCase() === wantedName);
