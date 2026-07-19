@@ -133,9 +133,8 @@ test("stop unknown session returns non-zero", () => {
   const env = setupEnv();
   try {
     const r = runCli(env, "stop nonexistent_session");
-    // stopSwarmSession is idempotent — it may return ok even for unknown sessions
-    // The important thing is it doesn't crash
-    assert.ok(r.exitCode === 0 || r.exitCode === 4 || r.exitCode === 1);
+    // Unknown session → EXIT.NOT_FOUND (2). Active/already-stopped → 0. Never crashes.
+    assert.ok(r.exitCode === 0 || r.exitCode === 2, `Expected 0 or 2, got ${r.exitCode}: ${r.stderr}`);
   } finally { rmSync(env.tmpDir, { recursive: true, force: true }); }
 });
 

@@ -38,7 +38,7 @@ function setupEnv(opts = {}) {
 }
 
 function runCli(env, args, opts = {}) {
-  const cmd = `CCR_SWARM_FAKE_LAUNCH=${opts.fakeLaunch ? "1" : "0"} CCR_INTERNAL_HOME_DIR=${env.tmpDir} HOME=${env.tmpDir} ELECTRON_RUN_AS_NODE=1 ${electronPath} ${CLI} swarm ${args}`;
+  const cmd = `CCR_SWARM_FAKE_LAUNCH=${opts.fakeLaunch ? "1" : "0"} CCR_SWARM_TEST_MODE=${opts.testMode ? "1" : "0"} CCR_INTERNAL_HOME_DIR=${env.tmpDir} HOME=${env.tmpDir} ELECTRON_RUN_AS_NODE=1 ${electronPath} ${CLI} swarm ${args}`;
   try {
     const result = execSync(cmd, { cwd: REPO, encoding: "utf8", timeout: 30000, stdio: ["pipe", "pipe", "pipe"] });
     return { stdout: result.replace(/npm notice[\s\S]*$/m, "").trim(), stderr: "", exitCode: 0 };
@@ -176,7 +176,7 @@ test("exit 4: launch nonexistent swarm directory", () => {
 test("exit 5: controlled routing rejection (fail-closed with invalid assignments)", () => {
   const env = setupEnv();
   try {
-    const r = runCli(env, "test-reject");
+    const r = runCli(env, "__test-reject", { testMode: true });
     assert.equal(r.exitCode, 5);
     assert.ok(r.stderr.includes("rejected") || r.stdout.includes("rejected"));
     assert.ok(!r.stderr.includes("ccr-swarm-v1-"));
@@ -188,7 +188,7 @@ test("exit 5: controlled routing rejection (fail-closed with invalid assignments
 test("exit 5: rejection --json has stable error shape", () => {
   const env = setupEnv();
   try {
-    const r = runCli(env, "test-reject --json");
+    const r = runCli(env, "__test-reject --json", { testMode: true });
     assert.equal(r.exitCode, 5);
     const parsed = JSON.parse(r.stdout);
     assert.ok(parsed.error);
