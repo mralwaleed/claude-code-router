@@ -9,7 +9,6 @@
  * PID handling: the launched process id is captured best-effort (it may be the terminal-opener
  * pid on macOS) and is informational only — auth is always by token hash, never PID.
  */
-import { spawn } from "node:child_process";
 import { existsSync, writeFileSync, chmodSync } from "node:fs";
 import path from "node:path";
 import type { SwarmProfile, SwarmProviderView } from "@ccr/core/swarm/contracts";
@@ -18,6 +17,7 @@ import { SwarmStore } from "@ccr/core/swarm/store";
 import { SwarmAgentRegistry } from "@ccr/core/swarm/registry";
 import { providerViewsFromConfig, validateSwarmProfile } from "@ccr/core/swarm/validation";
 import { createSwarmSession, buildSwarmLaunchRuntime, stopSwarmSession } from "@ccr/core/swarm/launch";
+import { TerminalLaunchAdapter, type SwarmLaunchAdapter } from "@ccr/core/swarm/launch-adapter";
 import {
   toAgentDto,
   toAttributionDto,
@@ -43,7 +43,8 @@ export class SwarmManagement {
     private readonly gatewayEndpoint: string,
     private readonly providers: ReadonlyArray<SwarmProviderView> = [],
     private readonly now: () => string = () => new Date().toISOString(),
-    private readonly watch: boolean = true
+    private readonly watch: boolean = true,
+    private readonly launchAdapter: SwarmLaunchAdapter = new TerminalLaunchAdapter()
   ) {}
 
   // ---- Profiles ----
@@ -203,12 +204,8 @@ export class SwarmManagement {
     chmodSync(launchScript, 0o700);
 
     try {
-      const child =
-        process.platform === "darwin"
-          ? spawn("open", ["-a", "Terminal.app", launchScript], { detached: true, stdio: "ignore" })
-          : spawn("sh", [launchScript], { cwd: profile.launchDirectory, detached: true, stdio: "ignore" });
-      child.unref();
-      const pid = child.pid ?? null;
+      const launchResult = this.launchAdapter.launch({ launchScript, launchDirectory: profile.launchDirectory });
+      const pid = launchResult.pid;
       const stored = await this.store.getSessionById(created.session.id);
       if (stored) {
         await this.store.upsertSession({ ...stored, processId: pid });

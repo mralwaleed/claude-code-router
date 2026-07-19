@@ -1,14 +1,32 @@
 /**
- * Swarm routing resolution (Phase 4).
+ * Swarm routing resolution (Phase 4, hardened Phase 5A.4).
  *
- * Given a classification, resolves the Swarm assignment to a concrete {providerId, model, reason}
- * or DECLINES (owns=false) when no valid assignment exists — in which case the caller falls
- * through to existing CCR routing (markers/profile/default). A valid Swarm decision is never
- * overridden by legacy markers (markers apply only on decline).
+ * FALLBACK POLICY TRUTH TABLE
+ * ─────────────────────────────────────────────────────────────────────────
+ * Classification │ Direct valid? │ existing-ccr        │ swarm-default-required │ fail-closed
+ * ───────────────┼───────────────┼─────────────────────┼────────────────────────┼──────────────────
+ * AGENT          │ YES           │ use direct          │ use direct             │ use direct
+ * AGENT          │ NO            │ try default→decline │ try default→REJECT     │ REJECT (no try)
+ * LEADER         │ YES           │ use leader          │ use leader             │ use leader
+ * LEADER         │ NO            │ try default→decline │ try default→REJECT     │ REJECT
+ * UNKNOWN        │ —             │ default→decline     │ default→REJECT         │ default→REJECT
+ * AMBIGUOUS      │ —             │ default→decline     │ default→REJECT         │ default→REJECT
  *
- * Assignment precedence within an agent: UI override > frontmatter. Frontmatter providerId
- * takes precedence over display provider name (handled by validation.resolveAssignment).
- * Unknown/ambiguous cascade to the swarm fallback assignment when the default is invalid.
+ * Definitions:
+ *   use direct/leader  → owns=true + model set (provider invoked)
+ *   try default        → attempt swarm default then fallback; if valid, use it
+ *   decline            → owns=false (hand off to existing CCR routing)
+ *   REJECT             → owns=true + model undefined (gateway returns 503; provider NEVER called)
+ *
+ * Policy semantics:
+ *   existing-ccr          — Swarm attempts assignments/defaults; if none usable, CCR routing is allowed.
+ *   swarm-default-required — Direct preferred; swarm default mandatory; if unavailable, REJECT (no CCR).
+ *   fail-closed           — CCR always forbidden. AGENT/LEADER with invalid direct → REJECT immediately
+ *                           (does NOT silently substitute swarm default). UNKNOWN/AMBIGUOUS may use
+ *                           the configured swarm default. No permitted route → REJECT.
+ *
+ * A valid Swarm decision is never overridden by legacy markers (markers apply only on decline).
+ * Provider API credentials and Swarm session credentials are different trust domains.
  */
 import type {
   SwarmAgent,
