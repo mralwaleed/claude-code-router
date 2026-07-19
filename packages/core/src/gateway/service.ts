@@ -338,6 +338,7 @@ export class GatewayService {
   private swarmStore?: SwarmStore;
   private swarmAuth?: SwarmAuth;
   private readonly swarmRegistries = new Map<string, SwarmAgentRegistry>();
+  private readonly swarmRegistryProfileUpdatedAt = new Map<string, string>();
   private readonly pendingRawTraceUpdates = new Map<string, PendingRawTraceUpdate>();
   private readonly rawTraceSyncToken = randomUUID();
   private server?: Server;
@@ -380,27 +381,69 @@ export class GatewayService {
       return undefined;
     }
     try {
-      const profile = await this.swarmStore.getProfile(session.swarmId);
-      if (!profile || !profile.enabled) {
-        return undefined;
-      }
-      const providers = providerViewsFromConfig(this.config.Providers);
-      let registry = this.swarmRegistries.get(session.swarmId);
-      if (!registry) {
-        registry = new SwarmAgentRegistry({
-          swarmId: session.swarmId,
-          agentDirectories: profile.agentDirectories,
-          providers,
-          watch: true,
-          agentOverrides: profile.agentOverrides
-        });
-        await registry.initialScan();
-        this.swarmRegistries.set(session.swarmId, registry);
-      }
-      return { session, profile, registry: registry.getRegistrySnapshot(), providers };
+      return await this.buildSwarmRequestContext(session);
     } catch {
       return undefined; // fail-open: never break the request on registry problems
     }
+  }
+
+  /**
+   * Build (or reuse) the Swarm request context. Separated from getSwarmRequestContext so the
+   * fail-open catch stays in production while tests can surface deterministic build errors.
+   * - Invalidates the cached registry when the profile changed (overrides/enabled/assignments);
+   *   the file watcher tracks agent-file edits, not profile-level changes.
+   * - Passes profile.agentOverrides into the registry so per-agent UI overrides take effect.
+   */
+  private async buildSwarmRequestContext(session: SwarmSession): Promise<SwarmRequestContext | undefined> {
+    const profile = await this.swarmStore!.getProfile(session.swarmId);
+    if (!profile || !profile.enabled) {
+      return undefined;
+    }
+    const providers = providerViewsFromConfig(this.config!.Providers);
+    let registry = this.swarmRegistries.get(session.swarmId);
+    if (registry && swarmRegistryNeedsRebuild(this.swarmRegistryProfileUpdatedAt.get(session.swarmId), profile.updatedAt)) {
+      await registry.dispose();
+      this.swarmRegistries.delete(session.swarmId);
+      this.swarmRegistryProfileUpdatedAt.delete(session.swarmId);
+      registry = undefined;
+    }
+    if (!registry) {
+      registry = new SwarmAgentRegistry({
+        swarmId: session.swarmId,
+        agentDirectories: profile.agentDirectories,
+        providers,
+        watch: true,
+        agentOverrides: profile.agentOverrides
+      });
+      await registry.initialScan();
+      this.swarmRegistries.set(session.swarmId, registry);
+      this.swarmRegistryProfileUpdatedAt.set(session.swarmId, profile.updatedAt);
+    }
+    return { session, profile, registry: registry.getRegistrySnapshot(), providers };
+  }
+
+  /** Test seam: configure config + Swarm store without start() (drive the registry cache in tests). */
+  configureSwarmForTest(config: AppConfig, store: SwarmStore): void {
+    this.config = config;
+    this.plugin = new ClaudeCodeRouterPlugin(config);
+    this.swarmStore = store;
+  }
+
+  /** Test seam: resolved Swarm request context; rethrows build errors (no fail-open) for tests. */
+  async swarmRequestContextForTest(session: SwarmSession): Promise<SwarmRequestContext | undefined> {
+    if (!this.swarmStore || !this.config) {
+      return undefined;
+    }
+    return this.buildSwarmRequestContext(session);
+  }
+
+  /** Test seam: dispose cached registries (release file watchers) between tests. */
+  async disposeSwarmRegistriesForTest(): Promise<void> {
+    for (const registry of this.swarmRegistries.values()) {
+      await registry.dispose();
+    }
+    this.swarmRegistries.clear();
+    this.swarmRegistryProfileUpdatedAt.clear();
   }
 
   setBrowserAutomationMcpIntegration(integration: BrowserAutomationMcpIntegration): void {
@@ -561,6 +604,7 @@ export class GatewayService {
       void registry.dispose();
     }
     this.swarmRegistries.clear();
+    this.swarmRegistryProfileUpdatedAt.clear();
     proxyService.updateConfig(config);
     this.status = {
       ...this.status,
@@ -8779,6 +8823,15 @@ export function resolveSwarmTokenForRequest(headers: IncomingHttpHeaders): strin
     return headerApiKey;
   }
   return readAuthToken(headers);
+}
+
+/**
+ * A cached Swarm registry must be rebuilt when the profile's `updatedAt` changed since it was built.
+ * The file watcher only tracks agent-file edits, so profile-level override/disable/assignment
+ * changes need this explicit invalidation to take effect without a gateway restart.
+ */
+export function swarmRegistryNeedsRebuild(cachedProfileUpdatedAt: string | undefined, currentProfileUpdatedAt: string): boolean {
+  return cachedProfileUpdatedAt !== currentProfileUpdatedAt;
 }
 
 function readRemoteControlQueryAuthToken(request: IncomingMessage): string | undefined {

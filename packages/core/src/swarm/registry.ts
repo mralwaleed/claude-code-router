@@ -20,6 +20,7 @@ import {
   scanAgentDirectories
 } from "@ccr/core/swarm/agent-registry";
 import type { SwarmProviderView } from "@ccr/core/swarm/contracts";
+import { resolveAssignment } from "@ccr/core/swarm/validation";
 import { SwarmAgentWatcher, type WatcherStatus, type WatcherEventReason } from "@ccr/core/swarm/watcher";
 
 export type RegistrySnapshot = {
@@ -134,12 +135,34 @@ export class SwarmAgentRegistry {
       const override = this.agentOverrides[agent.slug];
       if (!override) return agent;
       const hasProviderOrModel = override.providerId !== undefined || override.model !== undefined;
+      const providerOverrideId = override.providerId ?? agent.providerOverrideId;
+      const modelOverride = override.model ?? agent.modelOverride;
+      let validationStatus = agent.validationStatus;
+      let validationErrors = agent.validationErrors;
+      if (hasProviderOrModel) {
+        // Re-validate the EFFECTIVE assignment. A valid override supersedes frontmatter
+        // provider/model errors (the agent routes correctly via the override); an invalid
+        // override replaces them with its own resolution errors. Non-assignment errors persist.
+        const nonAssignmentErrors = validationErrors.filter(
+          (e) => !e.includes("frontmatter provider") && !e.includes("frontmatter model")
+        );
+        const resolved = resolveAssignment({ providerId: providerOverrideId, model: modelOverride }, this.providers);
+        if (resolved.ok) {
+          validationStatus = "ok";
+          validationErrors = nonAssignmentErrors;
+        } else {
+          validationStatus = "invalid";
+          validationErrors = [...nonAssignmentErrors, ...resolved.errors];
+        }
+      }
       return {
         ...agent,
-        providerOverrideId: override.providerId ?? agent.providerOverrideId,
-        modelOverride: override.model ?? agent.modelOverride,
+        providerOverrideId,
+        modelOverride,
         assignmentSource: hasProviderOrModel ? ("override" as const) : agent.assignmentSource,
         enabled: override.enabled ?? agent.enabled,
+        validationStatus,
+        validationErrors
       };
     });
   }
