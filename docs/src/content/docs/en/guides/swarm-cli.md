@@ -260,6 +260,95 @@ ccr swarm validate swarm_xxx
 ccr swarm launch swarm_xxx
 ```
 
+## SIYAJ Example
+
+Swarm Profiles are **generic** — no project-specific logic exists in the core. SIYAJ is only an example configuration. Replace paths and provider/model values with your own.
+
+### Configuration
+
+```bash
+# Create the SIYAJ Swarm Profile
+ccr swarm create \
+  --name "SIYAJ" \
+  --workspace-root "$HOME/Projects/siyaj" \
+  --launch-directory "$HOME/Projects/siyaj/agents/team-leader/siyaj-enterprise" \
+  --agent-directory "$HOME/Projects/siyaj/agents/team-leader/.claude/agents" \
+  --leader-provider "Claude Proxy" --leader-model "claude-fable-5" \
+  --default-provider "Z.ai (Global) - Coding Plan" --default-model "glm-5.2" \
+  --fallback-provider "ChatGPT Plus" --fallback-model "gpt-5.6-sol" \
+  --fallback-policy existing-ccr \
+  --watch-files \
+  --json
+```
+
+### Agent Assignments
+
+After scanning, override specific agents to different models:
+
+```bash
+# Scan the agent directory
+ccr swarm scan swarm_xxx
+
+# Verify the team is discovered
+ccr swarm agent list swarm_xxx
+
+# Reviewer → GPT-5.6 Sol (different from the default GLM)
+ccr swarm agent override swarm_xxx reviewer \
+  --provider "ChatGPT Plus" --model "gpt-5.6-sol"
+
+# Planner → Claude Fable 5 (same as leader)
+ccr swarm agent override swarm_xxx planner \
+  --provider "Claude Proxy" --model "claude-fable-5"
+```
+
+### Expected Assignment Table
+
+| Agent | Provider | Model | Source |
+|---|---|---|---|
+| Team Leader | Claude Proxy | claude-fable-5 | leader |
+| planner | Claude Proxy | claude-fable-5 | override |
+| worker | Z.ai - Coding Plan | glm-5.2 | frontmatter |
+| tester | Z.ai - Coding Plan | glm-5.2 | frontmatter |
+| reviewer | ChatGPT Plus | gpt-5.6-sol | override |
+| backend-engineer | Z.ai - Coding Plan | glm-5.2 | frontmatter |
+| frontend-engineer | Z.ai - Coding Plan | glm-5.2 | frontmatter |
+
+### Validate and Launch
+
+```bash
+# Validate the profile
+ccr swarm validate swarm_xxx
+
+# Launch the Team Leader
+ccr swarm launch swarm_xxx
+
+# Verify the active session
+ccr swarm sessions swarm_xxx
+
+# Check routing activity
+ccr swarm diagnostics swarm_xxx
+```
+
+### Agent File Format
+
+Each agent Markdown file in `.claude/agents/` uses frontmatter with `providerId` and `model`:
+
+```markdown
+---
+name: worker
+description: Implements scoped tasks.
+providerId: zai-global
+provider: Z.ai (Global) - Coding Plan
+model: glm-5.2
+---
+
+# Worker
+
+You implement tasks...
+```
+
+The `providerId` takes precedence over the display `provider` name. CLI overrides take precedence over frontmatter.
+
 ### Agent File Format
 
 Agent Markdown files in `.claude/agents/` use YAML frontmatter:

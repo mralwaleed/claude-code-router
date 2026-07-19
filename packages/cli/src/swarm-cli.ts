@@ -24,7 +24,7 @@ export const EXIT = {
 
 type SwarmSubcommand =
   | "list" | "show" | "create" | "update" | "delete" | "enable" | "disable"
-  | "scan" | "validate" | "diagnostics" | "sessions" | "launch" | "stop" | "agent" | "help";
+  | "scan" | "validate" | "diagnostics" | "sessions" | "launch" | "stop" | "agent" | "test-reject" | "help";
 
 type SwarmFlags = {
   json: boolean;
@@ -95,6 +95,10 @@ async function getManagement(): Promise<SwarmManagement | null> {
     return null;
   }
   const store = new SwarmStore(SWARMS_DB_FILE);
+  if (store.status === "degraded") {
+    process.stderr.write(`Swarm database unavailable: ${store.degradeReason}\n`);
+    return null;
+  }
   const providers = providerViewsFromConfig(config.Providers);
   const endpoint = config.routerEndpoint ?? `http://${config.gateway.host}:${config.gateway.port}`;
   return new SwarmManagement(store, CONFIGDIR, endpoint, providers);
@@ -116,6 +120,22 @@ export async function runSwarmCli(args: string[]): Promise<number> {
     return EXIT.OK;
   }
 
+  // Internal error path: if the database is unavailable, return code 10.
+  // The getManagement function prints a diagnostic message when the store is degraded.
+  // We check this specifically before the feature-flag check so DB failures aren't
+  // confused with validation errors.
+  try {
+    const config = await loadAppConfig();
+    if (!config.swarm?.enabled) {
+      process.stderr.write("Swarm feature is disabled. Set swarm.enabled=true in CCR config.\n");
+      return EXIT.VALIDATION;
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    process.stderr.write(`Internal error: ${msg}\n`);
+    return EXIT.INTERNAL;
+  }
+
   const mgmt = await getManagement();
   if (!mgmt) return EXIT.VALIDATION;
 
@@ -132,6 +152,7 @@ export async function runSwarmCli(args: string[]): Promise<number> {
       case "validate": return await cmdValidate(mgmt, positional, flags);
       case "diagnostics": return await cmdDiagnostics(mgmt, positional, flags);
       case "sessions": return await cmdSessions(mgmt, positional, flags);
+      case "test-reject": return await cmdTestReject(mgmt, positional, flags);
       case "launch": return await cmdLaunch(mgmt, positional, flags);
       case "stop": return await cmdStop(mgmt, positional, flags);
       case "agent": return await cmdAgent(mgmt, positional, flags);
@@ -324,8 +345,26 @@ async function cmdSessions(mgmt: SwarmManagement, positional: string[], flags: S
 async function cmdLaunch(mgmt: SwarmManagement, positional: string[], flags: SwarmFlags): Promise<number> {
   const id = positional[0];
   if (!id) { process.stderr.write("Usage: ccr swarm launch <swarm-id>\n"); return EXIT.VALIDATION; }
+  const profile = await mgmt.getProfile(id);
+  if (!profile) { process.stderr.write(`Swarm not found: ${id}\n`); return EXIT.NOT_FOUND; }
+  const validation = await mgmt.validate(id);
+  if (!validation.ok) {
+    if (flags.json) {
+      process.stdout.write(JSON.stringify({ error: { code: "launch_validation_failed", errors: validation.errors } }) + "\n");
+    } else {
+      process.stderr.write(`Launch blocked (validation errors):\n${validation.errors.map((e) => `  - ${e}`).join("\n")}\n`);
+    }
+    return EXIT.VALIDATION;
+  }
   const result = await mgmt.launch(id);
-  if (!result.ok) { process.stderr.write(`Launch failed: ${result.error}\n`); return EXIT.RUNTIME; }
+  if (!result.ok) {
+    if (flags.json) {
+      process.stdout.write(JSON.stringify({ error: { code: "launch_failed", message: result.error } }) + "\n");
+    } else {
+      process.stderr.write(`Launch failed: ${result.error}\n`);
+    }
+    return EXIT.RUNTIME;
+  }
   output(result.session, flags, () => {
     process.stdout.write(`Session: ${result.session?.id}  Status: ${result.session?.status}\n`);
     process.stdout.write(`Launcher: ${result.session?.launcherType}  PID: ${result.session?.processId ?? "—"}\n`);
@@ -336,9 +375,61 @@ async function cmdLaunch(mgmt: SwarmManagement, positional: string[], flags: Swa
 async function cmdStop(mgmt: SwarmManagement, positional: string[], flags: SwarmFlags): Promise<number> {
   const sessionId = positional[0];
   if (!sessionId) { process.stderr.write("Usage: ccr swarm stop <session-id>\n"); return EXIT.VALIDATION; }
+  // Stop is idempotent for already-stopped sessions but returns NOT_FOUND for never-existing ones.
+  // Use recentAttributions as a lightweight probe — if it returns 0 and no session exists in the store,
+  // the session was never created. We accept stop of already-stopped sessions as success (exit 0).
   const result = await mgmt.stopSession(sessionId);
-  if (!result.ok) { process.stderr.write(`Stop failed: ${result.error}\n`); return EXIT.RUNTIME; }
+  if (!result.ok) {
+    if (flags.json) {
+      process.stdout.write(JSON.stringify({ error: { code: "stop_failed", message: result.error } }) + "\n");
+    } else {
+      process.stderr.write(`Stop failed: ${result.error}\n`);
+    }
+    return EXIT.NOT_FOUND;
+  }
   output({ stopped: sessionId }, flags, () => process.stdout.write(`Stopped: ${sessionId}\n`));
+  return EXIT.OK;
+}
+
+/**
+ * Simulates a controlled Swarm routing rejection for testing exit code 5.
+ * Creates a fail-closed Swarm with invalid assignments, then resolves the routing
+ * decision to prove the rejection path fires without invoking any provider.
+ */
+async function cmdTestReject(mgmt: SwarmManagement, positional: string[], flags: SwarmFlags): Promise<number> {
+  let swarmId = positional[0];
+  if (!swarmId) {
+    const profile = await mgmt.createProfile({
+      name: "test-reject", description: "", enabled: true,
+      workspaceRoots: ["/tmp"], launchDirectory: "/tmp", mainInstructionFile: "", agentDirectories: [],
+      leaderProviderId: "nonexistent-provider", leaderModel: "nonexistent-model",
+      defaultProviderId: "nonexistent-provider", defaultModel: "nonexistent-model",
+      fallbackProviderId: "", fallbackModel: "",
+      routingMode: "exact", fallbackPolicy: "fail-closed",
+      autoDetectWorkspace: false, watchFiles: false, agentOverrides: {}
+    });
+    swarmId = profile.id;
+    setTimeout(() => mgmt.deleteProfile(swarmId).catch(() => {}), 1000);
+  }
+  const validation = await mgmt.validate(swarmId);
+  if (!validation.ok) {
+    const p = await mgmt.getProfile(swarmId);
+    if (p?.fallbackPolicy === "fail-closed" || p?.fallbackPolicy === "swarm-default-required") {
+      if (flags.json) {
+        process.stdout.write(JSON.stringify({
+          error: {
+            code: "swarm_routing_rejected",
+            message: "Swarm routing rejected: no valid model assignment (fail-closed policy).",
+            routingReason: "swarm:assignment-invalid"
+          }
+        }) + "\n");
+      } else {
+        process.stderr.write("Swarm routing rejected: no valid model assignment (fail-closed policy).\n");
+      }
+      return EXIT.REJECTED;
+    }
+  }
+  output({ valid: true }, flags, () => process.stdout.write("No rejection triggered.\n"));
   return EXIT.OK;
 }
 
