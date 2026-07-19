@@ -67,48 +67,44 @@ export function resolveSwarmRouting(args: {
 }): SwarmRoutingResult {
   const { diagnostics, profile, agents, providers } = args;
   const classification = diagnostics.classification;
-  let resolved: Resolved | undefined;
+  const policy = profile.fallbackPolicy ?? "existing-ccr";
+
+  const trySwarmDefault = (reason: string): Resolved | undefined =>
+    resolveAssignmentWithReason(profile.defaultProviderId, profile.defaultModel, reason, providers) ??
+    resolveAssignmentWithReason(profile.fallbackProviderId, profile.fallbackModel, reason, providers);
+
+  // REJECT = Swarm owns but has no valid model → gateway returns a controlled 503.
+  const reject = (): SwarmRoutingResult => ({ owns: true, reason: SWARM_ROUTING_REASON.assignmentInvalid });
+  // DECLINE = hand off to existing CCR routing.
+  const decline = (): SwarmRoutingResult => ({ owns: false, reason: SWARM_ROUTING_REASON.assignmentInvalid });
+  // Unresolved policy resolution (after direct + default attempts fail)
+  const unresolved = (): SwarmRoutingResult => (policy === "existing-ccr" ? decline() : reject());
 
   if (classification.kind === "agent") {
     const agent = agents.find((a) => a.id === classification.agentId);
-    if (agent) {
-      resolved = resolveAgentAssignment(agent, providers);
-    }
-  } else if (classification.kind === "leader") {
-    resolved = resolveAssignmentWithReason(profile.leaderProviderId, profile.leaderModel, SWARM_ROUTING_REASON.leader, providers);
-  } else if (classification.kind === "unknown") {
-    resolved =
-      resolveAssignmentWithReason(profile.defaultProviderId, profile.defaultModel, SWARM_ROUTING_REASON.defaultUnknown, providers) ??
-      resolveAssignmentWithReason(profile.fallbackProviderId, profile.fallbackModel, SWARM_ROUTING_REASON.defaultUnknown, providers);
-  } else {
-    // ambiguous
-    resolved =
-      resolveAssignmentWithReason(profile.defaultProviderId, profile.defaultModel, SWARM_ROUTING_REASON.defaultAmbiguous, providers) ??
-      resolveAssignmentWithReason(profile.fallbackProviderId, profile.fallbackModel, SWARM_ROUTING_REASON.defaultAmbiguous, providers);
+    const direct = agent ? resolveAgentAssignment(agent, providers) : undefined;
+    if (direct) return { owns: true, model: direct.model, providerId: direct.providerId, reason: direct.reason };
+    // Direct invalid — fail-closed rejects immediately; others try swarm default
+    if (policy === "fail-closed") return reject();
+    const def = trySwarmDefault(SWARM_ROUTING_REASON.defaultUnknown);
+    if (def) return { owns: true, model: def.model, providerId: def.providerId, reason: def.reason };
+    return unresolved();
   }
 
-  if (resolved) {
-    return { owns: true, model: resolved.model, providerId: resolved.providerId, reason: resolved.reason };
+  if (classification.kind === "leader") {
+    const direct = resolveAssignmentWithReason(profile.leaderProviderId, profile.leaderModel, SWARM_ROUTING_REASON.leader, providers);
+    if (direct) return { owns: true, model: direct.model, providerId: direct.providerId, reason: direct.reason };
+    if (policy === "fail-closed") return reject();
+    const def = trySwarmDefault(SWARM_ROUTING_REASON.defaultUnknown);
+    if (def) return { owns: true, model: def.model, providerId: def.providerId, reason: def.reason };
+    return unresolved();
   }
 
-  // Primary assignment unresolved — apply fallback policy
-  const policy = profile.fallbackPolicy ?? "existing-ccr";
-
-  if (policy === "swarm-default-required" && (classification.kind === "agent" || classification.kind === "leader")) {
-    const fallbackToDefault = resolveAssignmentWithReason(profile.defaultProviderId, profile.defaultModel, SWARM_ROUTING_REASON.defaultUnknown, providers)
-      ?? resolveAssignmentWithReason(profile.fallbackProviderId, profile.fallbackModel, SWARM_ROUTING_REASON.defaultUnknown, providers);
-    if (fallbackToDefault) {
-      return { owns: true, model: fallbackToDefault.model, providerId: fallbackToDefault.providerId, reason: fallbackToDefault.reason };
-    }
-  }
-
-  if (policy === "fail-closed") {
-    // No fallback to CCR; Swarm owns the request but has no valid model → controlled failure.
-    return { owns: true, reason: SWARM_ROUTING_REASON.assignmentInvalid };
-  }
-
-  // existing-ccr (default): decline → existing CCR routing handles the request
-  return { owns: false, reason: SWARM_ROUTING_REASON.assignmentInvalid };
+  // unknown / ambiguous: the swarm default IS the direct assignment
+  const reason = classification.kind === "unknown" ? SWARM_ROUTING_REASON.defaultUnknown : SWARM_ROUTING_REASON.defaultAmbiguous;
+  const def = trySwarmDefault(reason);
+  if (def) return { owns: true, model: def.model, providerId: def.providerId, reason: def.reason };
+  return unresolved();
 }
 
 /** Classify + route in one step (operates on one immutable registry snapshot). */

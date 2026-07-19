@@ -15,10 +15,11 @@ export type SwarmDraft = {
   fallbackModel: string;
   watchFiles: boolean;
   autoDetectWorkspace: boolean;
+  fallbackPolicy: string;
 };
 
 export function emptyDraft(): SwarmDraft {
-  return { name: "", description: "", enabled: true, workspaceRoots: "", launchDirectory: "", agentDirectories: "", leaderProviderId: "", leaderModel: "", defaultProviderId: "", defaultModel: "", fallbackProviderId: "", fallbackModel: "", watchFiles: true, autoDetectWorkspace: false };
+  return { name: "", description: "", enabled: true, workspaceRoots: "", launchDirectory: "", agentDirectories: "", leaderProviderId: "", leaderModel: "", defaultProviderId: "", defaultModel: "", fallbackProviderId: "", fallbackModel: "", watchFiles: true, autoDetectWorkspace: false, fallbackPolicy: "existing-ccr" };
 }
 
 export function validateSwarmDraft(draft: SwarmDraft): string | null {

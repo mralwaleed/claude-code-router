@@ -914,6 +914,22 @@ class GatewayService {
         url: request.url ?? path,
         swarm: swarmCtx
       });
+      // Controlled rejection: Swarm owns but has no valid model (fail-closed / swarm-default-required with invalid default).
+      // Stop BEFORE provider selection; record attribution; return 503.
+      if (swarmCtx && routed.swarm?.routing.owns && !routed.decision.model && swarmSession) {
+        try {
+          swarmAttribution = buildSwarmAttribution({
+            requestId: randomUUID(),
+            session: swarmSession,
+            diagnostics: routed.swarm.diagnostics,
+            routing: routed.swarm.routing,
+            now: new Date().toISOString()
+          });
+          void this.swarmStore?.recordAttribution(swarmAttribution);
+        } catch { /* fail-open */ }
+        sendJson(response, 503, { error: { type: "swarm_routing_rejected", message: "Swarm routing rejected: no valid model assignment." } });
+        return;
+      }
       const serialized = Buffer.from(`${JSON.stringify(routed.body)}\n`, "utf8");
       headers["content-type"] = "application/json";
       headers["x-ccr-route-reason"] = sanitizeHeaderValue(routed.decision.reason);

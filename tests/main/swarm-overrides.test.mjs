@@ -133,26 +133,63 @@ function diagAgent(agentId) {
   return { classification: { kind: "agent", agentId, confidence: "exact", method: "exact-body-containment" }, candidateAgentIds: [agentId], matchedLeaderAnchors: [], registryGeneration: 1 };
 }
 
-test("fallback existing-ccr: invalid agent assignment → decline to CCR", () => {
+test("fallback existing-ccr: invalid agent + valid default → uses default", () => {
   const agents = [{ id: "a", swarmId: "sw1", slug: "a", displayName: "a", sourceFile: "/x", providerOverrideId: "nope", modelOverride: "x", enabled: true, capabilities: [], bodyHash: "h", distinctiveHash: "h", canonicalBody: "body", assignmentSource: "frontmatter", validationStatus: "ok", validationErrors: [], lastLoadedAt: "", lastModifiedAt: "" }];
   const r = resolveSwarmRouting({ diagnostics: diagAgent("a"), profile: makeProfile("existing-ccr"), agents, providers: PROVIDERS });
-  assert.equal(r.owns, false);
-  assert.equal(r.reason, SWARM_ROUTING_REASON.assignmentInvalid);
-});
-
-test("fallback swarm-default-required: invalid agent → falls to swarm default", () => {
-  const agents = [{ id: "a", swarmId: "sw1", slug: "a", displayName: "a", sourceFile: "/x", providerOverrideId: "nope", modelOverride: "x", enabled: true, capabilities: [], bodyHash: "h", distinctiveHash: "h", canonicalBody: "body", assignmentSource: "frontmatter", validationStatus: "ok", validationErrors: [], lastLoadedAt: "", lastModifiedAt: "" }];
-  const r = resolveSwarmRouting({ diagnostics: diagAgent("a"), profile: makeProfile("swarm-default-required"), agents, providers: PROVIDERS });
   assert.equal(r.owns, true);
   assert.equal(r.model, "b-model"); // fell to default
 });
 
-test("fallback fail-closed: invalid agent → owns but no model (controlled failure)", () => {
+test("fallback existing-ccr: invalid agent + invalid default → decline to CCR", () => {
+  const agents = [{ id: "a", swarmId: "sw1", slug: "a", displayName: "a", sourceFile: "/x", providerOverrideId: "nope", modelOverride: "x", enabled: true, capabilities: [], bodyHash: "h", distinctiveHash: "h", canonicalBody: "body", assignmentSource: "frontmatter", validationStatus: "ok", validationErrors: [], lastLoadedAt: "", lastModifiedAt: "" }];
+  const p = makeProfile("existing-ccr"); p.defaultProviderId = "nope"; p.defaultModel = "x";
+  const r = resolveSwarmRouting({ diagnostics: diagAgent("a"), profile: p, agents, providers: PROVIDERS });
+  assert.equal(r.owns, false);
+  assert.equal(r.reason, SWARM_ROUTING_REASON.assignmentInvalid);
+});
+
+test("fallback swarm-default-required: invalid agent + valid default → uses default", () => {
+  const agents = [{ id: "a", swarmId: "sw1", slug: "a", displayName: "a", sourceFile: "/x", providerOverrideId: "nope", modelOverride: "x", enabled: true, capabilities: [], bodyHash: "h", distinctiveHash: "h", canonicalBody: "body", assignmentSource: "frontmatter", validationStatus: "ok", validationErrors: [], lastLoadedAt: "", lastModifiedAt: "" }];
+  const r = resolveSwarmRouting({ diagnostics: diagAgent("a"), profile: makeProfile("swarm-default-required"), agents, providers: PROVIDERS });
+  assert.equal(r.owns, true);
+  assert.equal(r.model, "b-model");
+});
+
+test("fallback swarm-default-required: invalid agent + invalid default → REJECT (no CCR)", () => {
+  const agents = [{ id: "a", swarmId: "sw1", slug: "a", displayName: "a", sourceFile: "/x", providerOverrideId: "nope", modelOverride: "x", enabled: true, capabilities: [], bodyHash: "h", distinctiveHash: "h", canonicalBody: "body", assignmentSource: "frontmatter", validationStatus: "ok", validationErrors: [], lastLoadedAt: "", lastModifiedAt: "" }];
+  const p = makeProfile("swarm-default-required"); p.defaultProviderId = "nope"; p.defaultModel = "x";
+  const r = resolveSwarmRouting({ diagnostics: diagAgent("a"), profile: p, agents, providers: PROVIDERS });
+  assert.equal(r.owns, true);
+  assert.equal(r.model, undefined); // REJECT, not CCR
+});
+
+test("fallback fail-closed: invalid agent → REJECT (no default try, no CCR)", () => {
   const agents = [{ id: "a", swarmId: "sw1", slug: "a", displayName: "a", sourceFile: "/x", providerOverrideId: "nope", modelOverride: "x", enabled: true, capabilities: [], bodyHash: "h", distinctiveHash: "h", canonicalBody: "body", assignmentSource: "frontmatter", validationStatus: "ok", validationErrors: [], lastLoadedAt: "", lastModifiedAt: "" }];
   const r = resolveSwarmRouting({ diagnostics: diagAgent("a"), profile: makeProfile("fail-closed"), agents, providers: PROVIDERS });
   assert.equal(r.owns, true);
   assert.equal(r.model, undefined);
   assert.equal(r.reason, SWARM_ROUTING_REASON.assignmentInvalid);
+});
+
+test("fallback all policies: unknown with valid default → uses default", () => {
+  for (const policy of ["existing-ccr", "swarm-default-required", "fail-closed"]) {
+    const r = resolveSwarmRouting({ diagnostics: { classification: { kind: "unknown" }, candidateAgentIds: [], matchedLeaderAnchors: [], registryGeneration: 1 }, profile: makeProfile(policy), agents: [], providers: PROVIDERS });
+    assert.equal(r.owns, true, `${policy} unknown should use default`);
+    assert.equal(r.model, "b-model", `${policy} unknown model`);
+  }
+});
+
+test("fallback existing-ccr: unknown with invalid default → decline to CCR", () => {
+  const p = makeProfile("existing-ccr"); p.defaultProviderId = "nope"; p.defaultModel = "x";
+  const r = resolveSwarmRouting({ diagnostics: { classification: { kind: "unknown" }, candidateAgentIds: [], matchedLeaderAnchors: [], registryGeneration: 1 }, profile: p, agents: [], providers: PROVIDERS });
+  assert.equal(r.owns, false);
+});
+
+test("fallback fail-closed: unknown with invalid default → REJECT", () => {
+  const p = makeProfile("fail-closed"); p.defaultProviderId = "nope"; p.defaultModel = "x";
+  const r = resolveSwarmRouting({ diagnostics: { classification: { kind: "unknown" }, candidateAgentIds: [], matchedLeaderAnchors: [], registryGeneration: 1 }, profile: p, agents: [], providers: PROVIDERS });
+  assert.equal(r.owns, true);
+  assert.equal(r.model, undefined);
 });
 
 // ---- Session routing activity count ----

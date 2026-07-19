@@ -101,6 +101,31 @@ export function SwarmsView() {
     catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
   };
+  const [editAgentSlug, setEditAgentSlug] = useState<string | null>(null);
+  const [editAgentProv, setEditAgentProv] = useState("");
+  const [editAgentModel, setEditAgentModel] = useState("");
+
+  const saveAgentOverride = async (slug: string) => {
+    if (!selectedId || !editAgentProv || !editAgentModel) return;
+    setBusy(true);
+    try { await window.ccr!.swarmSetAgentOverride(selectedId, slug, { providerId: editAgentProv, model: editAgentModel }); setEditAgentSlug(null); setEditAgentProv(""); setEditAgentModel(""); await refreshDetail(selectedId); }
+    catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); }
+  };
+  const clearAgentOverride = async (slug: string) => {
+    if (!selectedId) return;
+    setBusy(true);
+    try { await window.ccr!.swarmClearAgentOverride(selectedId, slug); await refreshDetail(selectedId); }
+    catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); }
+  };
+  const toggleAgent = async (slug: string, enabled: boolean) => {
+    if (!selectedId) return;
+    setBusy(true);
+    try { await window.ccr!.swarmSetAgentEnabled(selectedId, slug, enabled); await refreshDetail(selectedId); }
+    catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); }
+  };
 
   // ---- Render ----
   if (error) {
@@ -148,7 +173,7 @@ export function SwarmsView() {
               <table className="w-full text-xs">
                 <thead className="bg-muted/50">
                   <tr>
-                    {["Agent", "Slug", "Status", "Provider/Model", "Fingerprint", "Modified"].map((h) => (
+                    {["Agent", "Slug", "Enabled", "Status", "Provider/Model", "Src", "Fingerprint", "Actions"].map((h) => (
                       <th key={h} className="px-2 py-1.5 text-left font-medium text-muted-foreground">{h}</th>
                     ))}
                   </tr>
@@ -159,12 +184,41 @@ export function SwarmsView() {
                       <td className="px-2 py-1.5 font-medium">{a.displayName}</td>
                       <td className="px-2 py-1.5 text-muted-foreground">{a.slug}</td>
                       <td className="px-2 py-1.5">
+                        <span className={a.enabled ? "text-emerald-600" : "text-muted-foreground"}>{a.enabled ? "yes" : "no"}</span>
+                      </td>
+                      <td className="px-2 py-1.5">
                         <span className={a.validationStatus === "ok" ? "text-emerald-600" : a.validationStatus === "degraded" ? "text-amber-600" : "text-destructive"}>{a.validationStatus}</span>
-                        {a.validationErrors.length > 0 && <span className="ml-1 text-muted-foreground" title={a.validationErrors.join("; }")}>⚠</span>}
+                        {a.validationErrors.length > 0 && (
+                          <span className="ml-1 cursor-help text-amber-600" title={a.validationErrors.join("\n")}>⚠</span>
+                        )}
                       </td>
                       <td className="px-2 py-1.5 text-muted-foreground">{a.providerOverrideId}/{a.modelOverride || "—"}</td>
+                      <td className="px-2 py-1.5 text-muted-foreground">{a.assignmentSource}</td>
                       <td className="px-2 py-1.5 font-mono text-muted-foreground">{a.bodyHashPrefix || "—"}</td>
-                      <td className="px-2 py-1.5 text-muted-foreground">{a.lastModifiedAt ? new Date(a.lastModifiedAt).toLocaleDateString() : "—"}</td>
+                      <td className="px-2 py-1.5">
+                        <div className="flex flex-wrap gap-1">
+                          {editAgentSlug === a.slug ? (
+                            <>
+                              <select className="rounded border border-border bg-background px-1 py-0.5 text-[11px]" value={editAgentProv} onChange={(e) => setEditAgentProv(e.target.value)}>
+                                <option value="">Provider</option>
+                                {providers.map((p) => <option key={p.id ?? p.name} value={p.id ?? p.name}>{p.name}</option>)}
+                              </select>
+                              <select className="rounded border border-border bg-background px-1 py-0.5 text-[11px]" value={editAgentModel} onChange={(e) => setEditAgentModel(e.target.value)} disabled={!editAgentProv}>
+                                <option value="">Model</option>
+                                {(providers.find((p) => (p.id ?? p.name) === editAgentProv)?.models ?? []).map((m) => <option key={m} value={m}>{m}</option>)}
+                              </select>
+                              <Button size="sm" variant="secondary" disabled={busy || !editAgentProv || !editAgentModel} onClick={() => saveAgentOverride(a.slug)}>Save</Button>
+                              <Button size="sm" variant="ghost" disabled={busy} onClick={() => { setEditAgentSlug(null); setEditAgentProv(""); setEditAgentModel(""); }}>Cancel</Button>
+                            </>
+                          ) : (
+                            <>
+                              <Button size="sm" variant="ghost" disabled={busy} onClick={() => { setEditAgentSlug(a.slug); setEditAgentProv(a.providerOverrideId); setEditAgentModel(a.modelOverride); }}>Override</Button>
+                              {a.assignmentSource === "override" && <Button size="sm" variant="ghost" disabled={busy} onClick={() => clearAgentOverride(a.slug)}>Clear</Button>}
+                              <Button size="sm" variant="ghost" disabled={busy} onClick={() => toggleAgent(a.slug, !a.enabled)}>{a.enabled ? "Disable" : "Enable"}</Button>
+                            </>
+                          )}
+                        </div>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -294,6 +348,7 @@ type SwarmDraft = {
   fallbackModel: string;
   watchFiles: boolean;
   autoDetectWorkspace: boolean;
+  fallbackPolicy: string;
 };
 
 // ---- Exported view-model helpers (testable without React) ----
@@ -316,7 +371,7 @@ export function resetModelOnProviderChange(draft: SwarmDraft, providers: Array<{
 }
 
 function emptyDraft(): SwarmDraft {
-  return { name: "", description: "", enabled: true, workspaceRoots: "", launchDirectory: "", agentDirectories: "", leaderProviderId: "", leaderModel: "", defaultProviderId: "", defaultModel: "", fallbackProviderId: "", fallbackModel: "", watchFiles: true, autoDetectWorkspace: false };
+  return { name: "", description: "", enabled: true, workspaceRoots: "", launchDirectory: "", agentDirectories: "", leaderProviderId: "", leaderModel: "", defaultProviderId: "", defaultModel: "", fallbackProviderId: "", fallbackModel: "", watchFiles: true, autoDetectWorkspace: false, fallbackPolicy: "existing-ccr" };
 }
 
 function SwarmForm({ providers, onSave, onCancel, busy }: { providers: GatewayProviderConfig[]; onSave: (input: any) => Promise<void>; onCancel: () => void; busy: boolean }) {
@@ -358,6 +413,7 @@ function SwarmForm({ providers, onSave, onCancel, busy }: { providers: GatewayPr
       fallbackProviderId: draft.fallbackProviderId,
       fallbackModel: draft.fallbackModel,
       routingMode: "exact",
+      fallbackPolicy: draft.fallbackPolicy,
       autoDetectWorkspace: draft.autoDetectWorkspace,
       watchFiles: draft.watchFiles
     });
@@ -382,6 +438,16 @@ function SwarmForm({ providers, onSave, onCancel, busy }: { providers: GatewayPr
         <ProviderModelField label="Leader" providerId={draft.leaderProviderId} model={draft.leaderModel} providers={providerOptions} onProvider={(v) => update("leaderProviderId", v)} onModel={(v) => update("leaderModel", v)} />
         <ProviderModelField label="Default" providerId={draft.defaultProviderId} model={draft.defaultModel} providers={providerOptions} onProvider={(v) => update("defaultProviderId", v)} onModel={(v) => update("defaultModel", v)} />
         <ProviderModelField label="Fallback (optional)" providerId={draft.fallbackProviderId} model={draft.fallbackModel} providers={providerOptions} onProvider={(v) => update("fallbackProviderId", v)} onModel={(v) => update("fallbackModel", v)} />
+
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="font-medium text-muted-foreground">Fallback Policy</span>
+          <select className="rounded-md border border-border bg-background px-3 py-1.5 text-sm" value={draft.fallbackPolicy} onChange={(e) => update("fallbackPolicy", e.target.value)}>
+            <option value="existing-ccr">existing-ccr — Fall through to CCR when Swarm can't route</option>
+            <option value="swarm-default-required">swarm-default-required — Use Swarm default; reject if invalid</option>
+            <option value="fail-closed">fail-closed — Reject unresolved (no CCR fallback)</option>
+          </select>
+          {draft.fallbackPolicy === "fail-closed" && <span className="text-xs text-amber-600">⚠ Unresolved routing will be rejected — requests fail rather than using CCR.</span>}
+        </label>
 
         <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={draft.enabled} onChange={(e) => update("enabled", e.target.checked)} /> Enabled</label>
         <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={draft.watchFiles} onChange={(e) => update("watchFiles", e.target.checked)} /> Watch files for changes</label>

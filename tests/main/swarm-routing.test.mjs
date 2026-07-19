@@ -73,18 +73,26 @@ test("ambiguous uses default (reason swarm:default-ambiguous)", () => {
   assert.equal(r.reason, SWARM_ROUTING_REASON.defaultAmbiguous);
 });
 
-test("invalid agent provider => decline (swarm:assignment-invalid)", () => {
+test("invalid agent provider + valid default → falls to default", () => {
   const agents = [swarmAgent("w", { providerId: "nope", model: "a-model" })];
   const r = resolveSwarmRouting({ diagnostics: diag("agent", "w"), profile: profile(), agents, providers: PROVIDERS });
+  assert.equal(r.owns, true);
+  assert.equal(r.model, "b-model");
+});
+
+test("invalid agent + invalid default → decline (swarm:assignment-invalid)", () => {
+  const agents = [swarmAgent("w", { providerId: "nope", model: "a-model" })];
+  const p = profile({ defaultProviderId: "nope", defaultModel: "x" });
+  const r = resolveSwarmRouting({ diagnostics: diag("agent", "w"), profile: p, agents, providers: PROVIDERS });
   assert.equal(r.owns, false);
   assert.equal(r.reason, SWARM_ROUTING_REASON.assignmentInvalid);
 });
 
-test("invalid model (not under provider) => decline", () => {
+test("invalid model (not under provider) + valid default → falls to default", () => {
   const agents = [swarmAgent("w", { providerId: "prov-a", model: "b-model" })];
   const r = resolveSwarmRouting({ diagnostics: diag("agent", "w"), profile: profile(), agents, providers: PROVIDERS });
-  assert.equal(r.owns, false);
-  assert.equal(r.reason, SWARM_ROUTING_REASON.assignmentInvalid);
+  assert.equal(r.owns, true);
+  assert.equal(r.model, "b-model");
 });
 
 test("missing default with no fallback => decline", () => {
@@ -102,8 +110,9 @@ test("unknown cascades to fallback when default invalid", () => {
   assert.equal(r.reason, SWARM_ROUTING_REASON.defaultUnknown);
 });
 
-test("agent id not present in registry => decline", () => {
-  const r = resolveSwarmRouting({ diagnostics: diag("agent", "ghost"), profile: profile(), agents: [], providers: PROVIDERS });
+test("agent id not present + invalid default => decline", () => {
+  const p = profile({ defaultProviderId: "nope", defaultModel: "x" });
+  const r = resolveSwarmRouting({ diagnostics: diag("agent", "ghost"), profile: p, agents: [], providers: PROVIDERS });
   assert.equal(r.owns, false);
   assert.equal(r.reason, SWARM_ROUTING_REASON.assignmentInvalid);
 });
