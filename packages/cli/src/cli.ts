@@ -60,6 +60,13 @@ const defaultCliCommandName = "ccr";
 const prepareProfileOnlyEnv = "CCR_CLI_PREPARE_PROFILE_ONLY";
 
 async function main(): Promise<void> {
+  // Swarm CLI dispatch
+  if (process.argv[2] === "swarm") {
+    const { runSwarmCli } = await import("./swarm-cli.js");
+    const exitCode = await runSwarmCli(process.argv.slice(3));
+    process.exit(exitCode);
+  }
+
   const options = parseArgs(process.argv.slice(2));
   if (options.command === "start") {
     if (options.help) {
