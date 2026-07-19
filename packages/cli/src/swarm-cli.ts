@@ -245,6 +245,8 @@ async function cmdUpdate(mgmt: SwarmManagement, positional: string[], flags: Swa
 async function cmdDelete(mgmt: SwarmManagement, positional: string[], flags: SwarmFlags): Promise<number> {
   const id = positional[0];
   if (!id) { process.stderr.write("Usage: ccr swarm delete <swarm-id>\n"); return EXIT.VALIDATION; }
+  const existing = await mgmt.getProfile(id);
+  if (!existing) { process.stderr.write(`Swarm not found: ${id}\n`); return EXIT.NOT_FOUND; }
   const result = await mgmt.deleteProfile(id);
   if (!result.ok) {
     process.stderr.write(`${result.error}\n`);
@@ -257,6 +259,8 @@ async function cmdDelete(mgmt: SwarmManagement, positional: string[], flags: Swa
 async function cmdSetEnabled(mgmt: SwarmManagement, positional: string[], enabled: boolean, flags: SwarmFlags): Promise<number> {
   const id = positional[0];
   if (!id) { process.stderr.write(`Usage: ccr swarm ${enabled ? "enable" : "disable"} <swarm-id>\n`); return EXIT.VALIDATION; }
+  const existing = await mgmt.getProfile(id);
+  if (!existing) { process.stderr.write(`Swarm not found: ${id}\n`); return EXIT.NOT_FOUND; }
   await mgmt.setEnabled(id, enabled);
   output({ id, enabled }, flags, () => process.stdout.write(`${enabled ? "Enabled" : "Disabled"}: ${id}\n`));
   return EXIT.OK;
