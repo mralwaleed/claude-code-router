@@ -229,7 +229,10 @@ export class SwarmManagement {
   }
 
   private async cleanupSession(sessionId: string): Promise<{ ok: boolean; error?: string }> {
-    const runtimeDir = this.launchedRuntimeDirs.get(sessionId);
+    // The runtime dir is deterministic (configDir/swarm-runtime/<sessionId>), so derive it when
+    // the in-memory map doesn't have it — otherwise stopping from a different process than the
+    // one that launched (e.g. `ccr swarm stop` from the CLI) would orphan the token-helper dir.
+    const runtimeDir = this.launchedRuntimeDirs.get(sessionId) ?? path.join(this.configDir, "swarm-runtime", sessionId);
     await stopSwarmSession(this.store, sessionId, runtimeDir);
     this.launchedRuntimeDirs.delete(sessionId);
     return { ok: true };
