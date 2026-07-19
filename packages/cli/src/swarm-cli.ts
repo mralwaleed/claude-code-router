@@ -24,7 +24,7 @@ export const EXIT = {
 
 type SwarmSubcommand =
   | "list" | "show" | "create" | "update" | "delete" | "enable" | "disable"
-  | "scan" | "validate" | "diagnostics" | "sessions" | "launch" | "stop" | "agent" | "test-reject" | "help";
+  | "scan" | "validate" | "diagnostics" | "sessions" | "launch" | "stop" | "agent" | "__test-reject" | "help";
 
 type SwarmFlags = {
   json: boolean;
@@ -152,7 +152,13 @@ export async function runSwarmCli(args: string[]): Promise<number> {
       case "validate": return await cmdValidate(mgmt, positional, flags);
       case "diagnostics": return await cmdDiagnostics(mgmt, positional, flags);
       case "sessions": return await cmdSessions(mgmt, positional, flags);
-      case "test-reject": return await cmdTestReject(mgmt, positional, flags);
+      case "__test-reject":
+        // Hidden test-only command, gated by CCR_SWARM_TEST_MODE=1
+        if (process.env.CCR_SWARM_TEST_MODE !== "1") {
+          process.stderr.write(`Unknown subcommand: __test-reject\n`);
+          return EXIT.VALIDATION;
+        }
+        return await cmdTestReject(mgmt, positional, flags);
       case "launch": return await cmdLaunch(mgmt, positional, flags);
       case "stop": return await cmdStop(mgmt, positional, flags);
       case "agent": return await cmdAgent(mgmt, positional, flags);

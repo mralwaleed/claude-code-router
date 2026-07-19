@@ -219,6 +219,12 @@ export class SwarmManagement {
   }
 
   async stopSession(sessionId: string): Promise<{ ok: boolean; error?: string }> {
+    // Check session exists — return NOT_FOUND for never-existing sessions.
+    // Idempotent for already-stopped sessions (stop succeeds again).
+    const session = await this.store.getSessionById(sessionId);
+    if (!session) {
+      return { ok: false, error: "Session not found" };
+    }
     return this.cleanupSession(sessionId);
   }
 
