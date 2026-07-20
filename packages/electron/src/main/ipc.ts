@@ -10,8 +10,11 @@ import { cancelBotGatewayQrLogin, startBotGatewayQrLogin, waitBotGatewayQrLogin 
 import { closeBotGatewayQrWindow, openBotGatewayQrWindow } from "./bot-gateway-qr-window-service";
 import { syncClaudeAppGatewayConfig } from "@ccr/core/agents/claude-app/gateway-service";
 import { loadAppConfig, saveApiKeysConfig, saveAppConfig } from "@ccr/core/config/config";
-import { API_KEYS_DB_FILE, APP_CONFIG_DB_FILE, APP_NAME, CONFIGDIR, CONFIG_FILE, DATADIR, GATEWAY_CONFIG_FILE, IPC_CHANNELS, LEGACY_CONFIG_FILE, ONBOARDING_FINISHED_FILE, PROXY_CA_CERT_FILE, REQUEST_LOGS_DB_FILE, USAGE_DB_FILE } from "@ccr/core/config/constants";
+import { API_KEYS_DB_FILE, APP_CONFIG_DB_FILE, APP_NAME, CONFIGDIR, CONFIG_FILE, DATADIR, GATEWAY_CONFIG_FILE, IPC_CHANNELS, LEGACY_CONFIG_FILE, ONBOARDING_FINISHED_FILE, PROXY_CA_CERT_FILE, REQUEST_LOGS_DB_FILE, SWARMS_DB_FILE, USAGE_DB_FILE } from "@ccr/core/config/constants";
 import { deepLinkService } from "./deep-link";
+import { SwarmManagement } from "@ccr/core/swarm/manage";
+import { SwarmStore } from "@ccr/core/swarm/store";
+import { providerViewsFromConfig } from "@ccr/core/swarm/validation";
 import { gatewayService } from "@ccr/core/gateway/service";
 import { shouldRestartGatewayForRuntimeConfigChange } from "@ccr/core/gateway/runtime-change";
 import { getProviderAccountSnapshots, invalidateProviderAccountSnapshotCache, listCliProxyProviders, resetCodexRateLimitCredit, testProviderAccountConnector } from "@ccr/core/providers/account-service";
@@ -1178,3 +1181,55 @@ function isFile(file: string): boolean {
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+
+// =============================
+// Swarm management IPC handlers
+// =============================
+
+let swarmManagement: SwarmManagement | undefined;
+let swarmStore: SwarmStore | undefined;
+
+async function getSwarmManagement(): Promise<SwarmManagement | undefined> {
+  const config = await loadAppConfig();
+  if (!config.swarm?.enabled) {
+    return undefined; // feature flag off → controlled disabled response
+  }
+  if (!swarmManagement) {
+    swarmStore = new SwarmStore(SWARMS_DB_FILE);
+    const providers = providerViewsFromConfig(config.Providers);
+    const endpoint = config.routerEndpoint ?? `http://${config.gateway.host}:${config.gateway.port}`;
+    swarmManagement = new SwarmManagement(swarmStore, CONFIGDIR, endpoint, providers);
+  }
+  return swarmManagement;
+}
+
+function validateSwarmId(id: unknown): string | undefined {
+  return typeof id === "string" && id.length > 0 && id.length <= 128 && /^[A-Za-z0-9_-]+$/.test(id) ? id : undefined;
+}
+
+function validateProfileInput(input: unknown): Record<string, unknown> | undefined {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return undefined;
+  const obj = input as Record<string, unknown>;
+  if (typeof obj.name !== "string" || obj.name.length === 0 || obj.name.length > 256) return undefined;
+  return obj;
+}
+
+const SWARM_DISABLED = { error: "Swarm feature is disabled" };
+
+ipcMain.handle(IPC_CHANNELS.appSwarmList, async () => (await getSwarmManagement())?.listProfiles() ?? []);
+ipcMain.handle(IPC_CHANNELS.appSwarmGet, async (_e, id: unknown) => { const m = await getSwarmManagement(); const sid = validateSwarmId(id); return m && sid ? m.getProfile(sid) : undefined; });
+ipcMain.handle(IPC_CHANNELS.appSwarmCreate, async (_e, input: unknown) => { const m = await getSwarmManagement(); if (!m) throw new Error(SWARM_DISABLED.error); const valid = validateProfileInput(input); if (!valid) throw new Error("Invalid profile input"); return m.createProfile(valid as any); });
+ipcMain.handle(IPC_CHANNELS.appSwarmUpdate, async (_e, id: unknown, input: unknown) => { const m = await getSwarmManagement(); const sid = validateSwarmId(id); const valid = validateProfileInput(input); if (!m || !sid || !valid) throw new Error("Invalid arguments"); return m.updateProfile(sid, valid as any); });
+ipcMain.handle(IPC_CHANNELS.appSwarmDelete, async (_e, id: unknown) => { const m = await getSwarmManagement(); const sid = validateSwarmId(id); if (!m || !sid) return { ok: false, error: "Invalid ID" }; return m.deleteProfile(sid); });
+ipcMain.handle(IPC_CHANNELS.appSwarmSetEnabled, async (_e, id: unknown, enabled: unknown) => { const m = await getSwarmManagement(); const sid = validateSwarmId(id); if (!m || !sid || typeof enabled !== "boolean") return; await m.setEnabled(sid, enabled); });
+ipcMain.handle(IPC_CHANNELS.appSwarmScan, async (_e, id: unknown) => { const m = await getSwarmManagement(); const sid = validateSwarmId(id); return m && sid ? m.rescan(sid) : []; });
+ipcMain.handle(IPC_CHANNELS.appSwarmValidate, async (_e, id: unknown) => { const m = await getSwarmManagement(); const sid = validateSwarmId(id); return m && sid ? m.validate(sid) : { ok: false, errors: ["Swarm disabled or invalid ID"], warnings: [] }; });
+ipcMain.handle(IPC_CHANNELS.appSwarmLaunch, async (_e, id: unknown) => { const m = await getSwarmManagement(); const sid = validateSwarmId(id); if (!m || !sid) return { ok: false, error: SWARM_DISABLED.error }; return m.launch(sid); });
+ipcMain.handle(IPC_CHANNELS.appSwarmStop, async (_e, sessionId: unknown) => { const m = await getSwarmManagement(); const sid = validateSwarmId(sessionId); if (!m || !sid) return { ok: false, error: "Invalid session ID" }; return m.stopSession(sid); });
+ipcMain.handle(IPC_CHANNELS.appSwarmSessions, async (_e, swarmId: unknown) => { const m = await getSwarmManagement(); const sid = validateSwarmId(swarmId); return m && sid ? m.listSessions(sid) : []; });
+ipcMain.handle(IPC_CHANNELS.appSwarmRegistrySnapshot, async (_e, id: unknown) => { const m = await getSwarmManagement(); const sid = validateSwarmId(id); return m && sid ? m.getRegistry(sid) : []; });
+ipcMain.handle(IPC_CHANNELS.appSwarmDiagnostics, async (_e, id: unknown) => { const m = await getSwarmManagement(); const sid = validateSwarmId(id); return m && sid ? m.diagnostics(sid) : { profileErrors: ["Swarm disabled"], profileWarnings: [], agentErrors: [], watcherStatus: "stopped", registryGeneration: 0, activeSessionCount: 0, recentAttributions: [] }; });
+ipcMain.handle(IPC_CHANNELS.appSwarmRecentAttributions, async (_e, swarmId: unknown) => { const m = await getSwarmManagement(); const sid = validateSwarmId(swarmId); return m && sid ? m.recentAttributions(sid) : []; });
+ipcMain.handle(IPC_CHANNELS.appSwarmSetAgentOverride, async (_e, swarmId: unknown, slug: unknown, override: unknown) => { const m = await getSwarmManagement(); const sid = validateSwarmId(swarmId); if (!m || !sid || typeof slug !== "string") return; await m.setAgentOverride(sid, slug, (typeof override === "object" && override ? override : {}) as Record<string, unknown> as any); });
+ipcMain.handle(IPC_CHANNELS.appSwarmClearAgentOverride, async (_e, swarmId: unknown, slug: unknown) => { const m = await getSwarmManagement(); const sid = validateSwarmId(swarmId); if (!m || !sid || typeof slug !== "string") return; await m.clearAgentOverride(sid, slug); });
+ipcMain.handle(IPC_CHANNELS.appSwarmSetAgentEnabled, async (_e, swarmId: unknown, slug: unknown, enabled: unknown) => { const m = await getSwarmManagement(); const sid = validateSwarmId(swarmId); if (!m || !sid || typeof slug !== "string" || typeof enabled !== "boolean") return; await m.setAgentEnabled(sid, slug, enabled); });

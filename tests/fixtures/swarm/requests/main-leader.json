@@ -1,0 +1,13 @@
+{
+  "model": "sonnet",
+  "system": [
+    { "type": "text", "text": "You are a Claude agent, built on Anthropic's Claude Agent SDK." },
+    { "type": "text", "text": "You are an interactive agent that helps users with software engineering tasks. Use the instructions below and the tools available to you to assist the user. (Synthetic base-prompt fixture preserving the real leader anchor phrase; not a real prompt.)" }
+  ],
+  "messages": [
+    { "role": "user", "content": "Summarize the current workspace." }
+  ],
+  "metadata": {
+    "user_id": "acct_session_FIXTURE-LEADER"
+  }
+}

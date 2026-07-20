@@ -95,6 +95,9 @@ export function createDefaultAppConfig(options: DefaultAppConfigOptions): AppCon
       agentAnalysis: false,
       requestLogs: false
     },
+    swarm: {
+      enabled: false
+    },
     preferredProvider: "",
     plugins: [],
     profile: {

@@ -78,6 +78,8 @@ import type {
   UsageStatsSnapshot
 } from "@ccr/core/contracts/app";
 import type { ProviderPreset } from "@ccr/core/providers/presets/types";
+import type { SwarmProfileDto, SwarmAgentDto, SwarmSessionDto, SwarmAttributionDto, SwarmDiagnosticsDto } from "@ccr/core/swarm/api";
+import type { SwarmProfileInput } from "@ccr/core/swarm/manage";
 
 declare global {
   interface Window {
@@ -156,6 +158,24 @@ declare global {
       onOpenUpdateRequest: (callback: () => void) => () => void;
       onProviderDeepLink: (callback: (request: ProviderDeepLinkRequest) => void) => () => void;
       onUpdateStatusChanged: (callback: (status: AppUpdateStatus) => void) => () => void;
+      // Swarm management
+      swarmList: () => Promise<SwarmProfileDto[]>;
+      swarmGet: (id: string) => Promise<SwarmProfileDto | undefined>;
+      swarmCreate: (input: SwarmProfileInput) => Promise<SwarmProfileDto>;
+      swarmUpdate: (id: string, input: SwarmProfileInput) => Promise<SwarmProfileDto | undefined>;
+      swarmDelete: (id: string) => Promise<{ ok: boolean; error?: string }>;
+      swarmSetEnabled: (id: string, enabled: boolean) => Promise<void>;
+      swarmScan: (id: string) => Promise<SwarmAgentDto[]>;
+      swarmValidate: (id: string) => Promise<{ ok: boolean; errors: string[]; warnings: string[] }>;
+      swarmLaunch: (id: string) => Promise<{ ok: boolean; session?: SwarmSessionDto; error?: string }>;
+      swarmStop: (sessionId: string) => Promise<{ ok: boolean; error?: string }>;
+      swarmSessions: (swarmId: string) => Promise<SwarmSessionDto[]>;
+      swarmRegistrySnapshot: (id: string) => Promise<SwarmAgentDto[]>;
+      swarmDiagnostics: (id: string) => Promise<SwarmDiagnosticsDto>;
+      swarmRecentAttributions: (swarmId: string) => Promise<SwarmAttributionDto[]>;
+      swarmSetAgentOverride: (swarmId: string, slug: string, override: { providerId?: string; model?: string; enabled?: boolean }) => Promise<void>;
+      swarmClearAgentOverride: (swarmId: string, slug: string) => Promise<void>;
+      swarmSetAgentEnabled: (swarmId: string, slug: string, enabled: boolean) => Promise<void>;
     };
   }
 }

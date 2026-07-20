@@ -1,0 +1,12 @@
+{
+  "model": "sonnet",
+  "system": [
+    { "type": "text", "text": "You are an interactive agent that helps users with software engineering tasks. (String-form system fixture; must canonicalize identically to system-array-form.json.)" }
+  ],
+  "messages": [
+    { "role": "user", "content": "ok" }
+  ],
+  "metadata": {
+    "user_id": "acct_session_FIXTURE-ARRAY"
+  }
+}

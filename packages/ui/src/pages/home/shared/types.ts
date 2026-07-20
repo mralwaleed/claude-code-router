@@ -375,7 +375,7 @@ import type { AgentFilterValue, RouterConditionSource } from "./options";
 import type { MotionSafeDivAttributes } from "./motion";
 
 
-export type ViewId = "onboarding" | "overview" | "observability" | "api-keys" | "server" | "profile" | "networking" | "logs" | "providers" | "models" | "routing" | "virtual-models" | "extensions";
+export type ViewId = "onboarding" | "overview" | "observability" | "api-keys" | "server" | "profile" | "networking" | "logs" | "providers" | "models" | "routing" | "virtual-models" | "extensions" | "swarms";
 export type NavigationId = ViewId;
 export type OnboardingStepId = "provider" | "profile" | "enter";
 export type AppLanguagePreference = "system" | "en" | "zh";

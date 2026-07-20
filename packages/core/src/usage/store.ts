@@ -377,6 +377,19 @@ function ensureUsageSchema(database: SqlDatabase): void {
   if (!columns.has("credential_id")) {
     database.exec("ALTER TABLE usage_events ADD COLUMN credential_id TEXT NOT NULL DEFAULT ''");
   }
+  // Swarm attribution (additive; empty for non-Swarm traffic).
+  if (!columns.has("swarm_id")) {
+    database.exec("ALTER TABLE usage_events ADD COLUMN swarm_id TEXT NOT NULL DEFAULT ''");
+  }
+  if (!columns.has("swarm_session_id")) {
+    database.exec("ALTER TABLE usage_events ADD COLUMN swarm_session_id TEXT NOT NULL DEFAULT ''");
+  }
+  if (!columns.has("swarm_agent_id")) {
+    database.exec("ALTER TABLE usage_events ADD COLUMN swarm_agent_id TEXT NOT NULL DEFAULT ''");
+  }
+  if (!columns.has("swarm_classification")) {
+    database.exec("ALTER TABLE usage_events ADD COLUMN swarm_classification TEXT NOT NULL DEFAULT ''");
+  }
 
   database.exec("CREATE INDEX IF NOT EXISTS usage_events_client_idx ON usage_events(client)");
   database.exec("CREATE INDEX IF NOT EXISTS usage_events_created_at_idx ON usage_events(created_at)");

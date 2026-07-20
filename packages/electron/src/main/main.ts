@@ -3,8 +3,8 @@ import { mkdirSync } from "node:fs";
 import { resolveRuntimeDataDir, setRuntimeAppPaths } from "@ccr/core/runtime/app-paths";
 import { copyMissingDirectoryContents, sameFilesystemPath } from "@ccr/core/storage/migration";
 
-const appDataPath = app.getPath("appData");
-const homePath = app.getPath("home");
+const appDataPath = process.env.CCR_INTERNAL_APP_DATA_DIR?.trim() || app.getPath("appData");
+const homePath = process.env.CCR_INTERNAL_HOME_DIR?.trim() || app.getPath("home");
 setRuntimeAppPaths({
   appData: appDataPath,
   home: homePath

@@ -26,6 +26,7 @@ export const GATEWAY_CONFIG_FILE = path.join(CONFIGDIR, "gateway.config.json");
 export const REQUEST_LOGS_DB_FILE = path.join(DATADIR, "request-logs.sqlite");
 export const RAW_TRACE_SPOOL_DIR = path.join(DATADIR, "raw-trace-spool");
 export const USAGE_DB_FILE = path.join(DATADIR, "usage.sqlite");
+export const SWARMS_DB_FILE = path.join(DATADIR, "swarms.sqlite");
 
 if (process.platform === "win32") {
   copyMissingDirectoryContents(LEGACY_WINDOWS_CONFIGDIR, CONFIGDIR, "Windows app data directory");

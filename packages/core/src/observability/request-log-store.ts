@@ -765,6 +765,21 @@ export class RequestLogStore {
     return this.initPromise;
   }
 
+  /** Annotate the request_log row for a request with Swarm attribution (additive columns). */
+  async annotateSwarm(
+    requestId: string,
+    swarm: { swarmId: string; swarmSessionId: string; agentId: string; classification: string; routingReason: string }
+  ): Promise<void> {
+    const database = await this.getDatabase();
+    database
+      .prepare(
+        `UPDATE request_logs
+         SET swarm_id = ?, swarm_session_id = ?, swarm_agent_id = ?, swarm_classification = ?, swarm_routing_reason = ?
+         WHERE request_id = ?`
+      )
+      .run(swarm.swarmId, swarm.swarmSessionId, swarm.agentId, swarm.classification, swarm.routingReason, requestId);
+  }
+
   private async open(): Promise<SqlDatabase> {
     mkdirSync(dirname(this.dbFile), { recursive: true });
     const database = createBetterSqliteDatabase(this.dbFile);
@@ -856,6 +871,21 @@ export async function recordGatewayRequestLog(input: RequestLogRecordInput): Pro
     await requestLogStore.record(input);
   } catch (error) {
     console.warn(`[request-log] Failed to record request log: ${formatError(error)}`);
+  }
+}
+
+/** Best-effort Swarm attribution annotation on a request_log row. Never throws (fail-open). */
+export async function annotateRequestLogSwarm(
+  requestId: string,
+  swarm: { swarmId: string; swarmSessionId: string; agentId: string; classification: string; routingReason: string } | undefined
+): Promise<void> {
+  if (!swarm) {
+    return;
+  }
+  try {
+    await requestLogStore.annotateSwarm(requestId, swarm);
+  } catch (error) {
+    console.warn(`[request-log] Failed to annotate swarm attribution: ${formatError(error)}`);
   }
 }
 
@@ -2680,6 +2710,12 @@ function ensureRequestLogSchema(database: SqlDatabase): void {
   addColumn("response_body_size_bytes", "INTEGER NOT NULL DEFAULT 0");
   addColumn("response_body_truncated", "INTEGER NOT NULL DEFAULT 0");
   addColumn("error", "TEXT NOT NULL DEFAULT ''");
+  // Swarm attribution (additive; null/empty for non-Swarm traffic)
+  addColumn("swarm_id", "TEXT NOT NULL DEFAULT ''");
+  addColumn("swarm_session_id", "TEXT NOT NULL DEFAULT ''");
+  addColumn("swarm_agent_id", "TEXT NOT NULL DEFAULT ''");
+  addColumn("swarm_classification", "TEXT NOT NULL DEFAULT ''");
+  addColumn("swarm_routing_reason", "TEXT NOT NULL DEFAULT ''");
 
   database.exec("CREATE INDEX IF NOT EXISTS request_logs_created_at_idx ON request_logs(created_at)");
   database.exec("CREATE INDEX IF NOT EXISTS request_logs_credential_id_idx ON request_logs(credential_id)");

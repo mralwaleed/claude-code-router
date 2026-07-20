@@ -676,9 +676,10 @@ function App() {
     () => navigation.filter((item) =>
       (item.id !== "networking" || networkCaptureEnabled) &&
       (item.id !== "logs" || requestLogsEnabled) &&
-      (item.id !== "observability" || agentAnalysisEnabled)
+      (item.id !== "observability" || agentAnalysisEnabled) &&
+      (item.id !== "swarms" || draftConfig.swarm?.enabled === true)
     ),
-    [agentAnalysisEnabled, networkCaptureEnabled, requestLogsEnabled]
+    [agentAnalysisEnabled, networkCaptureEnabled, requestLogsEnabled, draftConfig.swarm?.enabled]
   );
   const autoSaveRequestId = useRef(0);
   const onboardingProfileDraftSource = useRef("");

@@ -17,6 +17,8 @@ Claude Code **main requests** use the Claude Code Agent Config model. If that mo
 
 Claude Code Agent / Task / Workflow can spawn additional model requests. CCR uses tag injection to let those spawned requests choose a more appropriate CCR model:
 
+> Need each agent on a **fixed** model (deterministic, not chosen by the parent each time)? See [Per-Agent Model Routing](/en/guides/per-agent-models/) — a static `<CCR-AGENT-MODEL>` marker in each agent file that always wins.
+
 ```text
 <CCR-SUBAGENT-MODEL>provider/model</CCR-SUBAGENT-MODEL>
 ```

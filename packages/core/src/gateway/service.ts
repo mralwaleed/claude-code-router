@@ -40,7 +40,7 @@ import {
 import { findProviderPresetByBaseUrl, providerApiKeySafetyIssue } from "@ccr/core/providers/presets/index";
 import { normalizeProviderBaseUrl as normalizeProviderBaseUrlInput } from "@ccr/core/providers/url";
 import { backendService } from "@ccr/core/plugins/backend-service";
-import { RAW_TRACE_SPOOL_DIR } from "@ccr/core/config/constants";
+import { RAW_TRACE_SPOOL_DIR, SWARMS_DB_FILE } from "@ccr/core/config/constants";
 import { loadPersistedApiKeys } from "@ccr/core/config/api-key-store";
 import { codexDefaultBaseUrl, readCodexAuth } from "@ccr/core/agents/local-providers/service";
 import { fetchWithSystemProxy, getSystemProxyUrlForProtocol } from "@ccr/core/proxy/system-proxy-fetch";
@@ -48,9 +48,17 @@ import { handleNetworkCaptureMcpRequest, isNetworkCaptureMcpPath } from "@ccr/co
 import { BROWSER_AUTOMATION_MCP_PATH, TOOL_HUB_MCP_SERVER_NAME, browserAutomationMcpEnabled, toolHubBuiltInBackendServers, toolHubMcpRuntimeConfig, toolHubRequestTimeoutMs } from "@ccr/core/mcp/toolhub-config";
 import { pluginService } from "@ccr/core/plugins/service";
 import { proxyService } from "@ccr/core/proxy/service";
-import { createSseErrorDetector, recordGatewayRequestLog, updateGatewayRequestLogFromRawTrace, type RequestLogRawTraceUpdateInput } from "@ccr/core/observability/request-log-store";
+import { annotateRequestLogSwarm, createSseErrorDetector, recordGatewayRequestLog, updateGatewayRequestLogFromRawTrace, type RequestLogRawTraceUpdateInput } from "@ccr/core/observability/request-log-store";
 import { recordGatewayUsageCapture } from "@ccr/core/usage/store";
 import { ClaudeCodeRouterPlugin, normalizeRouteSelector } from "@ccr/core/gateway/claude-code-router-plugin";
+import { SwarmAuth, extractClaudeSessionId, recoverSessionsOnBoot } from "@ccr/core/swarm/session";
+import { SwarmStore } from "@ccr/core/swarm/store";
+import { isSwarmToken } from "@ccr/core/swarm/token";
+import { SwarmAgentRegistry } from "@ccr/core/swarm/registry";
+import { resolveSwarmRequest, type SwarmRequestContext } from "@ccr/core/swarm/routing";
+import { buildSwarmAttribution } from "@ccr/core/swarm/attribution";
+import { providerViewsFromConfig } from "@ccr/core/swarm/validation";
+import type { SwarmAttribution, SwarmSession } from "@ccr/core/swarm/contracts";
 import { ccrRemoteControlPathPrefix, ccrRemoteControlService } from "@ccr/core/gateway/remote-control-service";
 import {
   claudeCodeEffectiveMaxInputTokens,
@@ -252,7 +260,10 @@ const localObservabilityHeaderNames = new Set([
   "x-ccr-cursor-openai-compat",
   "x-ccr-logical-provider",
   "x-ccr-provider-credential-chain",
-  "x-ccr-provider-credential-saturated"
+  "x-ccr-provider-credential-saturated",
+  "x-ccr-swarm-session-id",
+  "x-ccr-swarm-id",
+  "x-ccr-swarm-agent-id"
 ]);
 const proxyHeaderDenyList = new Set(["connection", coreGatewayAuthHeader, "host", "upgrade"]);
 const responseHeaderDenyList = new Set(["connection", "content-encoding", "transfer-encoding"]);
@@ -317,13 +328,17 @@ const privateFileMode = 0o600;
 const persistedApiKeyCacheTtlMs = 1000;
 let persistedApiKeyCache: { loadedAt: number; values: ApiKeyConfig[] } | undefined;
 
-class GatewayService {
+export class GatewayService {
   private browserAutomationMcpIntegration?: BrowserAutomationMcpIntegration;
   private browserWebSearchMcpIntegration?: BrowserWebSearchMcpIntegration;
   private child?: ChildProcess;
   private config?: AppConfig;
   private coreAuthToken = "";
   private plugin?: ClaudeCodeRouterPlugin;
+  private swarmStore?: SwarmStore;
+  private swarmAuth?: SwarmAuth;
+  private readonly swarmRegistries = new Map<string, SwarmAgentRegistry>();
+  private readonly swarmRegistryProfileUpdatedAt = new Map<string, string>();
   private readonly pendingRawTraceUpdates = new Map<string, PendingRawTraceUpdate>();
   private readonly rawTraceSyncToken = randomUUID();
   private server?: Server;
@@ -337,6 +352,98 @@ class GatewayService {
 
   setBrowserWebSearchMcpIntegration(integration: BrowserWebSearchMcpIntegration): void {
     this.browserWebSearchMcpIntegration = integration;
+  }
+
+  /**
+   * Dedicated internal Swarm auth namespace. Returns undefined when the feature flag is off (no
+   * runtime cost, gateway behaves identically to a build without Swarm). Lazy-initializes the
+   * SwarmStore + SwarmAuth; never touches provider API keys.
+   */
+  private getSwarmAuth(): SwarmAuth | undefined {
+    if (!this.config?.swarm?.enabled) {
+      return undefined;
+    }
+    if (!this.swarmAuth) {
+      this.swarmStore = new SwarmStore(SWARMS_DB_FILE);
+      this.swarmAuth = new SwarmAuth(this.swarmStore);
+    }
+    return this.swarmAuth;
+  }
+
+  /**
+   * Build the per-request Swarm context: profile + an immutable registry snapshot + provider
+   * views. The registry is scanned ONCE per swarm (cached) and never rescanned per request.
+   * Returns undefined when the profile is missing/disabled or the registry cannot load
+   * (caller falls through to existing CCR routing — fail-open).
+   */
+  private async getSwarmRequestContext(session: SwarmSession): Promise<SwarmRequestContext | undefined> {
+    if (!this.swarmStore || !this.config) {
+      return undefined;
+    }
+    try {
+      return await this.buildSwarmRequestContext(session);
+    } catch {
+      return undefined; // fail-open: never break the request on registry problems
+    }
+  }
+
+  /**
+   * Build (or reuse) the Swarm request context. Separated from getSwarmRequestContext so the
+   * fail-open catch stays in production while tests can surface deterministic build errors.
+   * - Invalidates the cached registry when the profile changed (overrides/enabled/assignments);
+   *   the file watcher tracks agent-file edits, not profile-level changes.
+   * - Passes profile.agentOverrides into the registry so per-agent UI overrides take effect.
+   */
+  private async buildSwarmRequestContext(session: SwarmSession): Promise<SwarmRequestContext | undefined> {
+    const profile = await this.swarmStore!.getProfile(session.swarmId);
+    if (!profile || !profile.enabled) {
+      return undefined;
+    }
+    const providers = providerViewsFromConfig(this.config!.Providers);
+    let registry = this.swarmRegistries.get(session.swarmId);
+    if (registry && swarmRegistryNeedsRebuild(this.swarmRegistryProfileUpdatedAt.get(session.swarmId), profile.updatedAt)) {
+      await registry.dispose();
+      this.swarmRegistries.delete(session.swarmId);
+      this.swarmRegistryProfileUpdatedAt.delete(session.swarmId);
+      registry = undefined;
+    }
+    if (!registry) {
+      registry = new SwarmAgentRegistry({
+        swarmId: session.swarmId,
+        agentDirectories: profile.agentDirectories,
+        providers,
+        watch: true,
+        agentOverrides: profile.agentOverrides
+      });
+      await registry.initialScan();
+      this.swarmRegistries.set(session.swarmId, registry);
+      this.swarmRegistryProfileUpdatedAt.set(session.swarmId, profile.updatedAt);
+    }
+    return { session, profile, registry: registry.getRegistrySnapshot(), providers };
+  }
+
+  /** Test seam: configure config + Swarm store without start() (drive the registry cache in tests). */
+  configureSwarmForTest(config: AppConfig, store: SwarmStore): void {
+    this.config = config;
+    this.plugin = new ClaudeCodeRouterPlugin(config);
+    this.swarmStore = store;
+  }
+
+  /** Test seam: resolved Swarm request context; rethrows build errors (no fail-open) for tests. */
+  async swarmRequestContextForTest(session: SwarmSession): Promise<SwarmRequestContext | undefined> {
+    if (!this.swarmStore || !this.config) {
+      return undefined;
+    }
+    return this.buildSwarmRequestContext(session);
+  }
+
+  /** Test seam: dispose cached registries (release file watchers) between tests. */
+  async disposeSwarmRegistriesForTest(): Promise<void> {
+    for (const registry of this.swarmRegistries.values()) {
+      await registry.dispose();
+    }
+    this.swarmRegistries.clear();
+    this.swarmRegistryProfileUpdatedAt.clear();
   }
 
   setBrowserAutomationMcpIntegration(integration: BrowserAutomationMcpIntegration): void {
@@ -357,6 +464,19 @@ class GatewayService {
     this.config = config;
     this.coreAuthToken = generateCoreGatewayAuthToken();
     this.plugin = new ClaudeCodeRouterPlugin(config);
+    this.swarmAuth = undefined;
+    this.swarmStore = undefined;
+    if (config.swarm?.enabled) {
+      // Deterministic restart recovery: expire sessions whose TTL elapsed while down.
+      try {
+        const bootStore = new SwarmStore(SWARMS_DB_FILE);
+        this.swarmStore = bootStore;
+        this.swarmAuth = new SwarmAuth(bootStore);
+        void recoverSessionsOnBoot(bootStore).catch(() => undefined);
+      } catch {
+        // fail-open: Swarm unavailable, normal routing continues
+      }
+    }
     this.status = {
       coreEndpoint: endpoint(config.gateway.coreHost, config.gateway.corePort),
       endpoint: endpoint(config.gateway.host, config.gateway.port),
@@ -477,6 +597,14 @@ class GatewayService {
     assertLoopbackCoreHost(config.gateway.coreHost);
     this.config = config;
     this.plugin = new ClaudeCodeRouterPlugin(config);
+    // Re-evaluate Swarm auth namespace against the new config (lazy getSwarmAuth will re-init).
+    this.swarmAuth = undefined;
+    this.swarmStore = undefined;
+    for (const registry of this.swarmRegistries.values()) {
+      void registry.dispose();
+    }
+    this.swarmRegistries.clear();
+    this.swarmRegistryProfileUpdatedAt.clear();
     proxyService.updateConfig(config);
     this.status = {
       ...this.status,
@@ -642,25 +770,47 @@ class GatewayService {
       return;
     }
 
-    const authorization = await authorize(request, response, this.config);
-    if (!authorization.ok) {
-      return;
+    const swarmAuth = this.getSwarmAuth();
+    // Prefer an explicit Swarm token carried in `x-api-key` (resolveSwarmTokenForRequest). Claude
+    // Code sends an OAuth bearer in `authorization` when subscription-logged-in while the Swarm
+    // token travels in `x-api-key`; reading `authorization` first would mask the Swarm token.
+    const swarmToken =
+      swarmAuth &&
+      (resolveSwarmTokenForRequest(request.headers) || readRemoteControlQueryAuthToken(request));
+    let apiKey: ApiKeyConfig | undefined;
+    let swarmSession: SwarmSession | undefined;
+
+    if (swarmAuth && swarmToken && isSwarmToken(swarmToken)) {
+      // Dedicated Swarm auth namespace. A swarm-attempted token that fails is FAIL-CLOSED (401):
+      // it is never authenticated as another swarm nor silently routed as ordinary CCR.
+      const swarmOutcome = await swarmAuth.authenticate(swarmToken);
+      if (!swarmOutcome.ok) {
+        sendJson(response, 401, { error: { message: `Swarm session ${swarmOutcome.reason}.` } });
+        return;
+      }
+      swarmSession = swarmOutcome.session;
+    } else {
+      const authorization = await authorize(request, response, this.config);
+      if (!authorization.ok) {
+        return;
+      }
+      apiKey = authorization.apiKey;
     }
 
     if (request.method === "POST" && path === "/v1/messages/count_tokens") {
       const requestBody = await readRequestBody(request);
       const body = parseJsonObject(requestBody);
-      if (!reserveApiKeyLimits(authorization.apiKey, request, response, requestBody)) {
+      if (apiKey && !reserveApiKeyLimits(apiKey, request, response, requestBody)) {
         return;
       }
       sendJson(response, 200, this.plugin.countTokens(body));
       return;
     }
 
-    await this.proxyRequest(request, response, path, authorization.apiKey);
+    await this.proxyRequest(request, response, path, apiKey, swarmSession);
   }
 
-  private async proxyRequest(request: IncomingMessage, response: ServerResponse, path: string, apiKey?: ApiKeyConfig): Promise<void> {
+  private async proxyRequest(request: IncomingMessage, response: ServerResponse, path: string, apiKey?: ApiKeyConfig, swarmSession?: SwarmSession): Promise<void> {
     if (!this.config || !this.plugin) {
       sendJson(response, 503, { error: { message: "Gateway service is not configured." } });
       return;
@@ -671,9 +821,25 @@ class GatewayService {
       stripLocalGatewayAuthHeaders(headers);
       headers["x-auth-api-key-id"] = apiKey.id;
       headers["x-auth-sub"] = apiKey.id;
+    } else if (swarmSession) {
+      // Swarm namespace: strip the token credential and stamp internal correlation headers.
+      // These headers are in localObservabilityHeaderNames -> omitted before the upstream call.
+      stripLocalGatewayAuthHeaders(headers);
+      headers["x-ccr-swarm-session-id"] = sanitizeHeaderValue(swarmSession.id);
+      headers["x-ccr-swarm-id"] = sanitizeHeaderValue(swarmSession.swarmId);
     }
     const method = request.method ?? "GET";
     const requestBody = await readRequestBody(request);
+    if (swarmSession) {
+      // Bind the Claude Code session id exactly once; reject rebinding (fail-closed).
+      const parsedBody = parseJsonObject(requestBody);
+      const claudeSid = extractClaudeSessionId(parsedBody, request.headers as Record<string, string | string[] | undefined>);
+      const binding = await this.getSwarmAuth()?.bindClaudeSession(swarmSession.id, claudeSid);
+      if (binding && !binding.ok) {
+        sendJson(response, 401, { error: { message: `Swarm session ${binding.reason}.` } });
+        return;
+      }
+    }
     const client = inferGatewayClient(apiKey, request.headers);
     const cursorCompatPreparation = prepareCursorOpenAICompatChatBody(this.config, client, method, path, requestBody);
     if (cursorCompatPreparation) {
@@ -682,6 +848,7 @@ class GatewayService {
     let bodyToForward: Buffer | undefined = cursorCompatPreparation?.body ?? requestBody;
     let routeFallback = this.config.Router.fallback;
     let routedModel: string | undefined;
+    let swarmAttribution: SwarmAttribution | undefined;
     let codexApplyPatchBridgeActive = false;
     const claudeModelRewrite = prepareClaudeCodeDiscoveredModelRequest(this.config, request.headers, method, path, bodyToForward);
     if (claudeModelRewrite) {
@@ -763,6 +930,7 @@ class GatewayService {
           statusCode,
           url: requestUrl
         });
+        await annotateRequestLogSwarm(requestId, swarmAttribution);
         const pendingRawTraceUpdate = this.takePendingRawTraceUpdate(requestId);
         if (pendingRawTraceUpdate) {
           await updateGatewayRequestLogFromRawTrace(pendingRawTraceUpdate);
@@ -787,12 +955,30 @@ class GatewayService {
 
     if (method === "POST" && path === "/v1/messages") {
       const body = parseJsonObject(bodyToForward ?? requestBody);
+      const swarmCtx = swarmSession ? await this.getSwarmRequestContext(swarmSession) : undefined;
       const routed = await this.plugin.routeRequest({
         body,
         headers: headers as Record<string, string | string[] | undefined>,
         method,
-        url: request.url ?? path
+        url: request.url ?? path,
+        swarm: swarmCtx
       });
+      // Controlled rejection: Swarm owns but has no valid model (fail-closed / swarm-default-required with invalid default).
+      // Stop BEFORE provider selection; record attribution; return 503.
+      if (swarmCtx && routed.swarm?.routing.owns && !routed.decision.model && swarmSession) {
+        try {
+          swarmAttribution = buildSwarmAttribution({
+            requestId: randomUUID(),
+            session: swarmSession,
+            diagnostics: routed.swarm.diagnostics,
+            routing: routed.swarm.routing,
+            now: new Date().toISOString()
+          });
+          void this.swarmStore?.recordAttribution(swarmAttribution);
+        } catch { /* fail-open */ }
+        sendJson(response, 503, { error: { type: "swarm_routing_rejected", message: "Swarm routing rejected: no valid model assignment." } });
+        return;
+      }
       const serialized = Buffer.from(`${JSON.stringify(routed.body)}\n`, "utf8");
       headers["content-type"] = "application/json";
       headers["x-ccr-route-reason"] = sanitizeHeaderValue(routed.decision.reason);
@@ -802,6 +988,21 @@ class GatewayService {
         routedModel = routed.decision.model;
       }
       bodyToForward = serialized;
+      // Persist Swarm attribution (fail-open: never break routing on persistence problems).
+      if (routed.swarm && swarmSession) {
+        try {
+          swarmAttribution = buildSwarmAttribution({
+            requestId: randomUUID(),
+            session: swarmSession,
+            diagnostics: routed.swarm.diagnostics,
+            routing: routed.swarm.routing,
+            now: new Date().toISOString()
+          });
+          void this.swarmStore?.recordAttribution(swarmAttribution);
+        } catch {
+          // fail-open: attribution is best-effort
+        }
+      }
     }
     if (method === "POST" && requestProtocolForPath(path) === "openai_responses" && isCodexUserAgent(request.headers)) {
       const body = parseJsonObject(bodyToForward ?? requestBody);
@@ -8610,6 +8811,29 @@ function readAuthToken(headers: IncomingHttpHeaders): string | undefined {
   return raw.toLowerCase().startsWith("bearer ") ? raw.slice(7).trim() : raw;
 }
 
+/**
+ * Resolve the Swarm credential from a request's headers. Prefers an explicit Swarm token carried
+ * in `x-api-key` over the `authorization` bearer: when a user is OAuth-logged-in, Claude Code sends
+ * the OAuth bearer in `authorization` and the Swarm token in `x-api-key`, so reading `authorization`
+ * first would mask the Swarm token and authentication would fail.
+ */
+export function resolveSwarmTokenForRequest(headers: IncomingHttpHeaders): string | undefined {
+  const headerApiKey = readHeader(headers["x-api-key"]);
+  if (headerApiKey && isSwarmToken(headerApiKey)) {
+    return headerApiKey;
+  }
+  return readAuthToken(headers);
+}
+
+/**
+ * A cached Swarm registry must be rebuilt when the profile's `updatedAt` changed since it was built.
+ * The file watcher only tracks agent-file edits, so profile-level override/disable/assignment
+ * changes need this explicit invalidation to take effect without a gateway restart.
+ */
+export function swarmRegistryNeedsRebuild(cachedProfileUpdatedAt: string | undefined, currentProfileUpdatedAt: string): boolean {
+  return cachedProfileUpdatedAt !== currentProfileUpdatedAt;
+}
+
 function readRemoteControlQueryAuthToken(request: IncomingMessage): string | undefined {
   const url = new URL(request.url || "/", "http://127.0.0.1");
   if (url.pathname !== ccrRemoteControlPathPrefix && !url.pathname.startsWith(`${ccrRemoteControlPathPrefix}/`)) {
@@ -8642,6 +8866,17 @@ function omitLocalObservabilityHeaders(headers: Record<string, string>): Record<
     delete forwarded[name];
   }
   return forwarded;
+}
+
+/**
+ * Test-only: the exact header set that would be forwarded upstream after the Swarm-path
+ * stripping pipeline (forward → strip auth credential → omit local observability). Used to prove
+ * no Swarm metadata (token, session id, workspace, agent metadata) ever reaches a provider.
+ */
+export function forwardedUpstreamHeadersForTest(inbound: IncomingHttpHeaders): Record<string, string> {
+  const forwarded = forwardHeaders(inbound);
+  stripLocalGatewayAuthHeaders(forwarded);
+  return omitLocalObservabilityHeaders(forwarded);
 }
 
 function withCoreGatewayAuthHeader(headers: Record<string, string>, token: string): Record<string, string> {

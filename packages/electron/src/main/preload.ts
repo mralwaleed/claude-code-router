@@ -188,5 +188,23 @@ contextBridge.exposeInMainWorld("ccr", {
     const handler = (_event: Electron.IpcRendererEvent, status: AppUpdateStatus) => callback(status);
     ipcRenderer.on(IPC_CHANNELS.appUpdateStatusChanged, handler);
     return () => ipcRenderer.removeListener(IPC_CHANNELS.appUpdateStatusChanged, handler);
-  }
+  },
+  // Swarm management — typed, explicit methods (no generic IPC invoke)
+  swarmList: () => invoke(IPC_CHANNELS.appSwarmList),
+  swarmGet: (id: string) => invoke(IPC_CHANNELS.appSwarmGet, id),
+  swarmCreate: (input: unknown) => invoke(IPC_CHANNELS.appSwarmCreate, input),
+  swarmUpdate: (id: string, input: unknown) => invoke(IPC_CHANNELS.appSwarmUpdate, id, input),
+  swarmDelete: (id: string) => invoke(IPC_CHANNELS.appSwarmDelete, id),
+  swarmSetEnabled: (id: string, enabled: boolean) => invoke(IPC_CHANNELS.appSwarmSetEnabled, id, enabled),
+  swarmScan: (id: string) => invoke(IPC_CHANNELS.appSwarmScan, id),
+  swarmValidate: (id: string) => invoke(IPC_CHANNELS.appSwarmValidate, id),
+  swarmLaunch: (id: string) => invoke(IPC_CHANNELS.appSwarmLaunch, id),
+  swarmStop: (sessionId: string) => invoke(IPC_CHANNELS.appSwarmStop, sessionId),
+  swarmSessions: (swarmId: string) => invoke(IPC_CHANNELS.appSwarmSessions, swarmId),
+  swarmRegistrySnapshot: (id: string) => invoke(IPC_CHANNELS.appSwarmRegistrySnapshot, id),
+  swarmDiagnostics: (id: string) => invoke(IPC_CHANNELS.appSwarmDiagnostics, id),
+  swarmRecentAttributions: (swarmId: string) => invoke(IPC_CHANNELS.appSwarmRecentAttributions, swarmId),
+  swarmSetAgentOverride: (swarmId: string, slug: string, override: unknown) => invoke(IPC_CHANNELS.appSwarmSetAgentOverride, swarmId, slug, override),
+  swarmClearAgentOverride: (swarmId: string, slug: string) => invoke(IPC_CHANNELS.appSwarmClearAgentOverride, swarmId, slug),
+  swarmSetAgentEnabled: (swarmId: string, slug: string, enabled: boolean) => invoke(IPC_CHANNELS.appSwarmSetAgentEnabled, swarmId, slug, enabled)
 });

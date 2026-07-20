@@ -11,7 +11,10 @@ import { scanBotHandoffBluetoothTargets, scanBotHandoffWifiTargets } from "@ccr/
 import { cancelBotGatewayQrLogin, startBotGatewayQrLogin, waitBotGatewayQrLogin } from "@ccr/core/agents/bot-gateway/qr-login-service";
 import { syncClaudeAppGatewayConfig, restoreClaudeAppGatewayConfig } from "@ccr/core/agents/claude-app/gateway-service";
 import { loadAppConfig, saveApiKeysConfig, saveAppConfig } from "@ccr/core/config/config";
-import { API_KEYS_DB_FILE, APP_CONFIG_DB_FILE, APP_NAME, CONFIGDIR, CONFIG_FILE, DATADIR, GATEWAY_CONFIG_FILE, LEGACY_CONFIG_FILE, ONBOARDING_FINISHED_FILE, PROXY_CA_CERT_FILE, REQUEST_LOGS_DB_FILE, USAGE_DB_FILE } from "@ccr/core/config/constants";
+import { API_KEYS_DB_FILE, APP_CONFIG_DB_FILE, APP_NAME, CONFIGDIR, CONFIG_FILE, DATADIR, GATEWAY_CONFIG_FILE, LEGACY_CONFIG_FILE, ONBOARDING_FINISHED_FILE, PROXY_CA_CERT_FILE, REQUEST_LOGS_DB_FILE, SWARMS_DB_FILE, USAGE_DB_FILE } from "@ccr/core/config/constants";
+import { SwarmManagement } from "@ccr/core/swarm/manage";
+import { SwarmStore } from "@ccr/core/swarm/store";
+import { providerViewsFromConfig } from "@ccr/core/swarm/validation";
 import { detectProviderIcon } from "@ccr/core/providers/icons";
 import { fetchProviderManifest } from "@ccr/core/providers/manifest-service";
 import { getLocalAgentProviderCandidates, importLocalAgentProvider, probeLocalAgentProvider } from "@ccr/core/agents/local-providers/service";
@@ -425,8 +428,41 @@ const rpcHandlers: Record<string, RpcHandler> = {
   updateInstall: () => {
     throw new Error("Updates are only available in the desktop app.");
   },
-  waitBotGatewayQrLogin: (request) => waitBotGatewayQrLogin(request as BotGatewayQrLoginWaitRequest)
+  waitBotGatewayQrLogin: (request) => waitBotGatewayQrLogin(request as BotGatewayQrLoginWaitRequest),
+  // Swarm management — routed to SwarmManagement (same as Electron IPC)
+  swarmList: async () => (await getSwarmManagementForWeb())?.listProfiles() ?? [],
+  swarmGet: async (id) => { const m = await getSwarmManagementForWeb(); return m && typeof id === "string" ? m.getProfile(id) : undefined; },
+  swarmCreate: async (input) => { const m = await getSwarmManagementForWeb(); if (!m) throw new Error("Swarm feature is disabled"); return m.createProfile(input as any); },
+  swarmUpdate: async (id, input) => { const m = await getSwarmManagementForWeb(); if (!m || typeof id !== "string") throw new Error("Invalid arguments"); return m.updateProfile(id, input as any); },
+  swarmDelete: async (id) => { const m = await getSwarmManagementForWeb(); if (!m || typeof id !== "string") return { ok: false, error: "Invalid" }; return m.deleteProfile(id); },
+  swarmSetEnabled: async (id, enabled) => { const m = await getSwarmManagementForWeb(); if (m && typeof id === "string" && typeof enabled === "boolean") await m.setEnabled(id, enabled); },
+  swarmScan: async (id) => { const m = await getSwarmManagementForWeb(); return m && typeof id === "string" ? m.rescan(id) : []; },
+  swarmValidate: async (id) => { const m = await getSwarmManagementForWeb(); return m && typeof id === "string" ? m.validate(id) : { ok: false, errors: ["disabled"], warnings: [] }; },
+  swarmLaunch: async (id) => { const m = await getSwarmManagementForWeb(); if (!m || typeof id !== "string") return { ok: false, error: "disabled" }; return m.launch(id); },
+  swarmStop: async (sessionId) => { const m = await getSwarmManagementForWeb(); if (!m || typeof sessionId !== "string") return { ok: false, error: "Invalid" }; return m.stopSession(sessionId); },
+  swarmSessions: async (swarmId) => { const m = await getSwarmManagementForWeb(); return m && typeof swarmId === "string" ? m.listSessions(swarmId) : []; },
+  swarmRegistrySnapshot: async (id) => { const m = await getSwarmManagementForWeb(); return m && typeof id === "string" ? m.getRegistry(id) : []; },
+  swarmDiagnostics: async (id) => { const m = await getSwarmManagementForWeb(); return m && typeof id === "string" ? m.diagnostics(id) : { profileErrors: ["disabled"], profileWarnings: [], agentErrors: [], watcherStatus: "stopped", registryGeneration: 0, activeSessionCount: 0, recentAttributions: [] }; },
+  swarmRecentAttributions: async (swarmId) => { const m = await getSwarmManagementForWeb(); return m && typeof swarmId === "string" ? m.recentAttributions(swarmId) : []; },
+  swarmSetAgentOverride: async (swarmId, slug, override) => { const m = await getSwarmManagementForWeb(); if (m && typeof swarmId === "string" && typeof slug === "string") await m.setAgentOverride(swarmId, slug, override as any); },
+  swarmClearAgentOverride: async (swarmId, slug) => { const m = await getSwarmManagementForWeb(); if (m && typeof swarmId === "string" && typeof slug === "string") await m.clearAgentOverride(swarmId, slug); },
+  swarmSetAgentEnabled: async (swarmId, slug, enabled) => { const m = await getSwarmManagementForWeb(); if (m && typeof swarmId === "string" && typeof slug === "string" && typeof enabled === "boolean") await m.setAgentEnabled(swarmId, slug, enabled); }
 };
+
+let webSwarmManagement: SwarmManagement | undefined;
+let webSwarmStore: SwarmStore | undefined;
+
+async function getSwarmManagementForWeb(): Promise<SwarmManagement | undefined> {
+  const config = await loadAppConfig();
+  if (!config.swarm?.enabled) return undefined;
+  if (!webSwarmManagement) {
+    webSwarmStore = new SwarmStore(SWARMS_DB_FILE);
+    const providers = providerViewsFromConfig(config.Providers);
+    const endpoint = config.routerEndpoint ?? `http://${config.gateway.host}:${config.gateway.port}`;
+    webSwarmManagement = new SwarmManagement(webSwarmStore, CONFIGDIR, endpoint, providers);
+  }
+  return webSwarmManagement;
+}
 
 async function startConfiguredServices(reason: string): Promise<void> {
   try {
